@@ -23,13 +23,17 @@ services:
       # Tenant provisioning is Enterprise Edition code. With MULTI_TENANT=true the license
       # check gives the EE features without a license (check_ee_features_enabled).
       - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true
-      # Cloud auth needs SMTP for the verification email. The stacks have no SMTP.
-      - REQUIRE_EMAIL_VERIFICATION=false
+      # Verification emails need SMTP. Without SMTP, true blocks every sign-up, so the
+      # default is false: a sign-up with a foreign address is possible until SMTP exists.
+      # With SMTP configured, set REQUIRE_EMAIL_VERIFICATION=true in .env (smtp action).
+      - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-false}
       # Upstream sets it on api_server only. Without it, a new company sign-up posts to the
       # control plane and fails with 500 (provisioning.py:157), and invites call billing
       # (manage/users.py:682-731). The stacks have no control plane.
       - DEV_MODE=true
-      # No control plane: every company counts as on trial. Lift the trial caps.
+      # No control plane: the trial check fails and every company counts as on trial. The
+      # trial API-call limit is 0, which would block every API key. Usage limits only meter
+      # Onyx-managed keys, and this stack has none (each company brings its own key).
       - USAGE_LIMITS_ENABLED=false
       - NUM_FREE_TRIAL_USER_INVITES=100000
       # Default 5 pre-builds 5 tenant schemas (app_configs.py:1992).
@@ -50,11 +54,13 @@ services:
       - MULTI_TENANT=true
       - AUTH_TYPE=cloud
       - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true
-      - REQUIRE_EMAIL_VERIFICATION=false
+      - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-false}
       # See api_server. Upstream does not set it here; the background tasks also provision
       # tenants and call the control plane without it.
       - DEV_MODE=true
-      # No control plane: every company counts as on trial. Lift the trial caps.
+      # No control plane: the trial check fails and every company counts as on trial. The
+      # trial API-call limit is 0, which would block every API key. Usage limits only meter
+      # Onyx-managed keys, and this stack has none (each company brings its own key).
       - USAGE_LIMITS_ENABLED=false
       - NUM_FREE_TRIAL_USER_INVITES=100000
       - TARGET_AVAILABLE_TENANTS=1
