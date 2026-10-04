@@ -211,3 +211,33 @@ and growth. Measure again with the real corpus before changing the VM size.
 2. Model provider credentials.
 3. The development VM, and the domain for the app.
 4. Decision on brand colours: these need our own web image (see `product/branding/README.md`).
+
+### Re-run with exit codes (4 October 2026)
+
+`run_checks.py`, `backup.sh` and `restore.sh` now fail the command when a check fails. The
+re-run below uses them against the live sandbox stack. Raw output is in
+`product/test-corpus/evidence/`. Each log records the exit code of every step.
+
+| Run | Step | Exit code | Checks |
+| --- | --- | --- | --- |
+| Full (`2026-10-04-sandbox-run.log`) | index, search, privacy | 0 | 15 of 15 pass |
+| | chat | 1 | 4 of 6 pass. Q2 and Q3 fail: the stand-in model answers without Search. |
+| | chat-forced | 1 | 2 of 4 pass. Same Q2 and Q3 failures. |
+| | update | 1 | Re-index (20 s) and search pass. The model answer for Q2 fails. |
+| | delete | 1 | Deletion reaches search in 5 s. The model answer for Q3 fails. |
+| Model-free, as in CI (`2026-10-04-sandbox-run-skip-chat.log`) | index, search, privacy, update, delete | 0 for all | 20 of 20 pass |
+
+Backup and restore (`2026-10-04-sandbox-backup-restore.log`):
+
+| Test | Exit code | Result |
+| --- | --- | --- |
+| Backup with a forced copy failure | 125 | Stack started again (11 containers, health 200). No backup folder. |
+| Backup | 0 | 80 s downtime. All files mode 600. |
+| Restore into the live project | 1 | Refused before any change. Live volume unchanged. |
+| Restore with a different `.env` | 1 | Refused. No volumes created. |
+| Isolated restore on port 3100 | 0 | Healthy in 46 s. `background` not started. `search` and `privacy` exit 0 on the copy. |
+| Whole-connector deletion (manual API test) | n/a | cc-pair 404 and no documents in search within about 5 s. |
+
+CI and deployment: `.github/workflows/axi-product-ci.yml` and `axi-deploy-dev.yml` are on the
+branch. GitHub lists 0 workflows for the fork, because Actions is not enabled. The owner must
+enable Actions before any run can happen (RUNBOOK section 11). No CI run exists yet.
