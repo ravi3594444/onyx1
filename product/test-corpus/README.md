@@ -72,3 +72,32 @@ Run the steps in this order. The command stops at the first failed step and exit
 To keep a log, add `2>&1 | tee checks.log` after the closing parenthesis, and run `set -o pipefail` first.
 
 If a step fails, the loop does not run the later steps. For example, if the owner check fails, the loop stops at `search`. To get the evidence of the later steps, run each one separately with the same command.
+
+## UI evidence
+
+`ui_evidence.mjs` takes browser screenshots of a deployed instance. It runs in
+GitHub Actions through `.github/workflows/axi-ui-evidence.yml` (manual start,
+inputs `base_url`, `mode`, `tag`, `login_email`). The run uploads the folder as
+the artifact `ui-evidence-<mode>-<run number>` and lists the PASS and FAIL
+lines in the step summary. The runner must reach `base_url`.
+
+The script needs Node 22 and the `playwright` npm package with Chromium. Env:
+`BASE_URL`, `OUT_DIR`, `TAG`, `PASSWORD` (never printed), `MODE`
+(`single` or `saas`), `LOGIN_EMAIL` (single mode), `EMAIL_DOMAIN`
+(default `example.com`).
+
+- Public pages: `01-login.png`, `01b-login-phone.png` (390x844), `02-signup.png`.
+  The script records `document.title` and checks that "22nd X AI" and the tagline
+  "More growth. Less busywork." are visible.
+- `MODE=saas`: signs up `owner-a-<tag>`, invites `member-a-<tag>`, visits the
+  LLM settings, sends one chat message (`08-company-a-chat.png`, check
+  `chat answered`), signs up `owner-b-<tag>` in a new context and checks that
+  company B does not list company A, signs up `member-a-<tag>` and checks that
+  the admin pages are blocked, then logs in as owner A again and checks that
+  member A is listed (`14-company-a-users-after.png`).
+- `MODE=single`: public pages, then login with `LOGIN_EMAIL` and screenshots
+  `03` to `05`.
+
+Each failed step saves `error-<step>.png`, prints `FAIL <step>: <reason>` and the
+next step runs. The script exits with 1 when any step fails. The test accounts
+are synthetic; the run prints their emails at the end.

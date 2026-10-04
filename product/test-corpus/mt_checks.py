@@ -37,17 +37,23 @@ from run_checks import (
     CORPUS_DIR,
     FILE_END_STATUSES,
     NEW_REFUND_FILE,
+    NO_INFO_PHRASES,
     QUESTIONS,
     Checks,
     OnyxSession,
     access_denied,
+    ask,
     create_chat_session,
     expect,
     log,
+    normalise,
     poll,
     search_docs,
     wait_for_indexing,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
+from default_assistant import ASSISTANT_ADDITION  # noqa: E402
 
 DOC_A = "expense-policy.md"
 DOC_B = NEW_REFUND_FILE
@@ -369,6 +375,158 @@ def setup_data(
     state["chat_session_a"] = create_chat_session(owner_a, f"MT chat A {tag}")
     state["persona_a"] = create_persona(owner_a, f"MT persona A {tag}")
     state["user_file_a"] = upload_user_file(checks, owner_a, tag)
+    model = model_settings()
+    if model is None:
+        log("MODEL_API_KEY unset: the companies get no model; chat answer checks skipped")
+        state["model_configured"] = False
+    else:
+        state["model_configured"] = all(
+            configure_company_model(checks, sessions[role], label, model)
+            for label, role in (("owner A", "owner-a"), ("owner B", "owner-b"))
+        )
+
+
+def model_settings() -> dict[str, str] | None:
+    """The hosted model from the environment, or None when MODEL_API_KEY is unset."""
+    key = os.environ.get("MODEL_API_KEY", "").strip()
+    if not key:
+        return None
+    return {
+        "api_key": key,
+        "provider": os.environ.get("MODEL_PROVIDER", "fireworks_ai").strip(),
+        "model": os.environ.get("MODEL_NAME", "").strip(),
+        "api_base": os.environ.get("MODEL_API_BASE", "").strip(),
+        "display_name": os.environ.get("MODEL_DISPLAY_NAME", "22nd X AI model").strip(),
+    }
+
+
+def configure_company_model(
+    checks: Checks, owner: OnyxSession, label: str, model: dict[str, str]
+) -> bool:
+    """Creates the hosted model provider in one company and makes it the default.
+
+    Every company configures its own model in Onyx v4.8.4 (Admin > LLM). This is the
+    same request as the admin UI sends. The key is never printed.
+    """
+    body: dict[str, Any] = {
+        "id": None,
+        "name": model["display_name"],
+        "provider": model["provider"],
+        "api_key": model["api_key"],
+        "api_key_changed": True,
+        "api_base": model["api_base"] or None,
+        "api_version": None,
+        "custom_config": {},
+        "custom_config_changed": True,
+        "is_public": True,
+        "is_auto_mode": False,
+        "groups": [],
+        "personas": [],
+        "deployment_name": None,
+        "keep_existing_models": False,
+        "model_configurations": [
+            {
+                "name": model["model"],
+                "is_visible": True,
+                "max_input_tokens": None,
+                "supports_image_input": False,
+            }
+        ],
+    }
+    status, saved = owner.request("PUT", "/api/admin/llm/provider?is_creation=true", body)
+    ok = status == 200 and isinstance(saved, dict) and "id" in saved
+    checks.record(
+        f"{label} creates the model provider {model['display_name']!r}",
+        ok,
+        {"status": status, "provider": model["provider"], "model": model["model"]},
+    )
+    if not ok:
+        return False
+    status, _ = owner.request(
+        "POST",
+        "/api/admin/llm/default",
+        {"provider_id": int(saved["id"]), "model_name": model["model"]},
+    )
+    checks.record(f"{label} sets the model as default", status == 200, {"status": status})
+    status, config = owner.request("GET", "/api/admin/default-assistant/configuration")
+    default_prompt = str((config or {}).get("default_system_prompt", "")) if status == 200 else ""
+    prompt_ok = False
+    if default_prompt:
+        status, _ = owner.request(
+            "PATCH",
+            "/api/admin/default-assistant",
+            {"system_prompt": default_prompt.rstrip() + "\n\n" + ASSISTANT_ADDITION + "\n"},
+        )
+        prompt_ok = status == 200
+    checks.record(
+        f"{label} adds the knowledge rules to the default assistant",
+        prompt_ok,
+        {"status": status, "default_prompt_chars": len(default_prompt)},
+    )
+    return True
+
+
+def says_no_info(answer: str) -> bool:
+    text = normalise(answer)
+    return any(normalise(phrase) in text for phrase in NO_INFO_PHRASES)
+
+
+def chat_summary(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "seconds": result["seconds"],
+        "cited": result["cited"],
+        "retrieved": result["retrieved"],
+        "answer": result["answer"][:300],
+        "error": result["error"],
+    }
+
+
+def check_model_chat(
+    checks: Checks, sessions: dict[str, OnyxSession], state: dict[str, Any], suffix: str
+) -> None:
+    """Answers come from the own company's documents only."""
+    if not state.get("model_configured"):
+        log("model not configured in the companies: chat answer checks skipped")
+        return
+    cases = (
+        ("owner A", "owner-a", QUERY_A, DOC_A, DOC_B, "1,500"),
+        ("member A", "member-a", QUERY_A, DOC_A, DOC_B, "1,500"),
+        ("owner B", "owner-b", QUERY_B, DOC_B, DOC_A, "30 days"),
+    )
+    for label, role, question, own_doc, other_doc, fact in cases:
+        result = ask(sessions[role], question)
+        answer = normalise(result["answer"])
+        problems = []
+        if own_doc not in result["cited"]:
+            problems.append(f"does not cite {own_doc}")
+        if other_doc in result["cited"] + result["retrieved"]:
+            problems.append(f"sees {other_doc} of the other company")
+        if normalise(fact) not in answer:
+            problems.append(f"does not state {fact!r}")
+        if result["error"] or not result["answer"]:
+            problems.append("no answer")
+        checks.record(
+            f"{label} chat answers from the own document{suffix}",
+            not problems,
+            {"problems": problems, **chat_summary(result)},
+        )
+    # Company B has no expense policy. The answer must say so, without citations, and must
+    # never show company A's document.
+    result = ask(sessions["owner-b"], QUERY_A)
+    problems = []
+    if DOC_A in result["cited"] + result["retrieved"]:
+        problems.append(f"sees {DOC_A} of company A")
+    if result["cited"]:
+        problems.append("cites documents")
+    if not says_no_info(result["answer"]):
+        problems.append("does not say that the documents lack the information")
+    if result["error"] or not result["answer"]:
+        problems.append("no answer")
+    checks.record(
+        f"owner B chat on company A's topic says the documents lack it{suffix}",
+        not problems,
+        {"problems": problems, **chat_summary(result)},
+    )
 
 
 def invite_from_b(
@@ -694,6 +852,7 @@ def read_checks(
     check_personas(checks, sessions, state, suffix)
     check_user_files(checks, sessions, state, suffix)
     check_pat(checks, base_url, sessions, state, suffix)
+    check_model_chat(checks, sessions, state, suffix)
 
 
 def run(

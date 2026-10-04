@@ -1,0 +1,111 @@
+name: 22nd X AI UI evidence
+# Takes browser screenshots of the deployed product with Playwright.
+# See product/test-corpus/README.md, section "UI evidence".
+# The runner needs network access to base_url. No repository secrets are used.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Public URL of the deployment
+        required: true
+        default: https://my-knowledge.duckdns.org
+      mode:
+        description: single (one tenant, needs LOGIN_EMAIL) or saas (multi-tenant sign-up)
+        type: choice
+        options:
+          - single
+          - saas
+        default: saas
+      tag:
+        description: Short run tag for the test account emails (default = run id)
+        required: false
+        default: ""
+      login_email:
+        description: Admin email for mode=single (ignored for saas)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  evidence:
+    name: Browser evidence (${{ inputs.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OUT_DIR: ${{ github.workspace }}/ui-evidence
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            product/test-corpus
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4.4.0
+        with:
+          node-version: "22"
+      - name: Install Playwright # zizmor: ignore[adhoc-packages]
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw"
+          cd "$RUNNER_TEMP/pw"
+          npm init -y >/dev/null
+          # Pinned version, no lockfile in this temp project.
+          npm i playwright@1.49.1
+          npx playwright install --with-deps chromium
+      - name: Generate the test password
+        id: password
+        run: |
+          # The logs are public. Mask the password before any step prints it.
+          PASSWORD="$(openssl rand -base64 18 | tr -d '/+=')Aa1"
+          echo "::add-mask::$PASSWORD"
+          echo "password=$PASSWORD" >> "$GITHUB_OUTPUT"
+      - name: Run the UI evidence script
+        id: run
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          MODE: ${{ inputs.mode }}
+          TAG_INPUT: ${{ inputs.tag }}
+          RUN_ID: ${{ github.run_id }}
+          LOGIN_EMAIL: ${{ inputs.login_email }}
+          PASSWORD: ${{ steps.password.outputs.password }}
+        run: |
+          TAG="${TAG_INPUT:-r${RUN_ID: -6}}"
+          export TAG
+          mkdir -p "$OUT_DIR"
+          # ESM resolves `playwright` from the script's own folder, so run a
+          # copy next to the installed node_modules.
+          cp product/test-corpus/ui_evidence.mjs "$RUNNER_TEMP/pw/ui_evidence.mjs"
+          set +e
+          node "$RUNNER_TEMP/pw/ui_evidence.mjs" 2>&1 | tee "$OUT_DIR/ui_evidence.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+      - name: Write the step summary
+        if: always()
+        env:
+          MODE: ${{ inputs.mode }}
+          BASE_URL: ${{ inputs.base_url }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          {
+            echo "## UI evidence (${MODE}) for ${BASE_URL}"
+            echo
+            echo '```'
+            grep -E '^(PASS|FAIL|INFO) ' "$OUT_DIR/ui_evidence.log" || echo "no result lines"
+            echo '```'
+            echo
+            echo "Screenshots: artifact \`ui-evidence-${MODE}-${RUN_NUMBER}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-evidence-${{ inputs.mode }}-${{ github.run_number }}
+          path: ${{ github.workspace }}/ui-evidence
+          retention-days: 30
+          if-no-files-found: warn

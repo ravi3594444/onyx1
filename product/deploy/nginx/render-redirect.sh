@@ -19,3 +19,26 @@ done
 # shellcheck disable=SC2016
 LISTEN_LINES="$lines" envsubst '$LISTEN_LINES' <"$template" >"$target"
 echo "render-redirect.sh: the redirect block listens on port 80 of: $addresses"
+
+# Multi-tenant stack only (LEAVE_TEAM_GUARD=true in compose.saas.yml). Onyx v4.8.4 lets the
+# last admin of a team call POST /api/tenants/leave-team, which then asks the control plane
+# to delete the team and fails with 500 without one. This deployment has no control plane,
+# so nginx answers the route with a clear 409 before it reaches the app. Nothing is deleted.
+# The exact-match location wins over the regex location of the upstream template.
+if [ "${LEAVE_TEAM_GUARD:-}" = "true" ]; then
+  app=/etc/nginx/conf.d/app.conf.template.prod
+  marker='    location ~ ^/(api|openapi.json)(/.*)?$ {'
+  guard=/tmp/leave-team-guard.conf
+  cat >"$guard" <<'EOF_GUARD'
+    location = /api/tenants/leave-team {
+        default_type application/json;
+        return 409 '{"detail": "Leaving a team is not available on this deployment. Ask another admin of your team to remove your account, or contact the 22nd X AI team."}';
+    }
+EOF_GUARD
+  grep -qxF "$marker" "$app" || { echo "render-redirect.sh: api location not found in $app" >&2; exit 1; }
+  awk -v marker="$marker" -v guard="$guard" '
+    $0 == marker { while ((getline line < guard) > 0) print line; close(guard) }
+    { print }' "$app" >"$app.tmp" && mv "$app.tmp" "$app"
+  grep -qF 'location = /api/tenants/leave-team' "$app" || { echo "render-redirect.sh: guard not inserted" >&2; exit 1; }
+  echo "render-redirect.sh: POST /api/tenants/leave-team answers 409 (leave-team guard)"
+fi

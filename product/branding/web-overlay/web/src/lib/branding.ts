@@ -38,6 +38,11 @@ const BOT_CAP = "The Slack bot";
 export const BRANDING_MESSAGES = {
   auth: {
     login: { welcomeSubtitle: { text: BRANDING.LOGIN_SUBTITLE } },
+    error: {
+      cloudSupportPrompt: {
+        text: `If you continue to experience problems, please contact your ${BRANDING.NAME} administrator.`,
+      },
+    },
     createAccount: {
       createTeamOption: { text: `Create a new ${BRANDING.NAME} team` },
       inviteOption: { text: `Be invited to an existing ${BRANDING.NAME} team` },
@@ -47,12 +52,36 @@ export const BRANDING_MESSAGES = {
     },
   },
   chat: { welcome: { greeting: { startText: BRANDING.TAGLINE } } },
+  common: {
+    errorPages: {
+      accessRestricted: {
+        billingAdminHint: {
+          text: `If you are the administrator, please visit the <billingLink>Admin Billing</billingLink> page to {hadLicense, select, true {renew} other {activate}} your license. Billing is handled by the ${BRANDING.NAME} team. Contact them for billing assistance.`,
+        },
+      },
+    },
+  },
+  sidebar: {
+    adminSidebar: {
+      businessOrEnterpriseOnly: {
+        tooltip: `This feature is available on the [Business or Enterprise version of ${BRANDING.NAME}](/admin/billing) only.`,
+      },
+      enterpriseOnly: {
+        tooltip: `This feature is available on the [Enterprise version of ${BRANDING.NAME}](/admin/billing) only.`,
+      },
+    },
+  },
   admin: {
     analytics: {
       slackChannelChart: {
         empty:
           "No Slack bot activity in this workspace for the selected time range.",
         error: "Failed to fetch Slack bot data.",
+      },
+    },
+    groups: {
+      tokenLimits: {
+        disabledTooltip: `Token rate limits are available on the [Enterprise version of ${BRANDING.NAME}](/admin/billing) only.`,
       },
     },
     exportLogs: {

@@ -36,6 +36,11 @@ only the fallbacks that upstream hard-codes as "Onyx".
 | `web/src/sections/sidebar/AccountPopover.tsx` | Account menu version row: brand mark and "22nd X AI <version>" (the link to the changelog stays) |
 | `web/src/sections/agents/AgentCard.tsx` | Owner of an agent without an owner (built-in agents): brand name instead of "Onyx" |
 | `web/src/lib/agents/components/AgentViewerModal.tsx` | Same owner fallback in the agent details modal |
+| `web/src/app/auth/login/LoginPage.tsx` | Cloud login: Google button only when `authTypeMetadata.oauthEnabled`; the SSO lookup only when `/auth/type` lists a provider (never on multi-tenant); the "or" divider only when one of them shows |
+| `web/src/app/auth/signup/page.tsx` | Cloud sign-up: the Google URL (button and "or" divider) only when `oauthEnabled` |
+| `web/src/app/auth/join/page.tsx` | Cloud join: same `oauthEnabled` gate |
+| `web/src/sections/modals/NewTenantModal.tsx` | Team name fallback `BRANDING.NAME` instead of `onyx.app` when `NEXT_PUBLIC_APP_DOMAIN` is unset ("...teammates of 22nd X AI") |
+| `web/src/sections/sidebar/AdminSidebar.tsx` | A failed billing fetch (no control plane) hides "Upgrade Plan"; "Plans & Billing" is already hidden because `hasSubscription` is false |
 | `web/lib/shared/tokens/semantic-light.json` | `theme-primary-04/05/06` and `action-text-link-05` set to the accent (`#3656e8`, hover `#4f6cee`, active `#2a46c4`) |
 | `web/lib/shared/tokens/semantic-dark.json` | Same tokens as light tints (`#8ea0f2`, `#a9b7f5`, `#7085ee`) so dark text stays readable on them |
 
@@ -58,6 +63,9 @@ placeholders stay the same.
 | `admin.security...allowedEmailDomains.placeholder`, `admin.ssoProviders...emailDomainsField.placeholder` | Example domain `example.com` instead of `onyx.app` |
 | `admin.theme.appName.description` | 'replace "22nd X AI" in the UI' |
 | `admin.analytics.slackChannelChart.*`, `admin.slackBots.*` (19 keys) | "OnyxBot" becomes "the Slack bot" (the bot name comes from the Slack app) |
+| `auth.error.cloudSupportPrompt.text` | "contact your 22nd X AI administrator" instead of the Onyx team and `support@onyx.app` (cloud mode; the `<link>` tag is not used) |
+| `common.errorPages.accessRestricted.billingAdminHint.text` | Billing is handled by the 22nd X AI team; no Stripe, no `support@onyx.app` (the `<supportLink>` tag is not used) |
+| `sidebar.adminSidebar.{enterpriseOnly,businessOrEnterpriseOnly}.tooltip`, `admin.groups.tokenLimits.disabledTooltip` | "version of Onyx" becomes "version of 22nd X AI"; the `/admin/billing` link stays |
 
 ## Left as upstream
 
@@ -68,10 +76,9 @@ placeholders stay the same.
   page texts that describe this setting (`admin.theme.branding.*`) stay too.
 - Docs and support: "Help & FAQ" to docs.onyx.app, the changelog link on the
   version row, `admin.slackBots.intro.docsPrompt`, `admin.theme.helpLink`,
-  `admin.shared.liteModeNotice` (deployment guide), `support@onyx.app` in
-  `auth.error.cloudSupportPrompt` and `common.errorPages.accessRestricted.billingAdminHint`.
-- Licence and plan facts: `admin.billing.license.keyField`, `admin.groups.tokenLimits.disabledTooltip`,
-  `sidebar.adminSidebar.{enterpriseOnly,businessOrEnterpriseOnly}`,
+  `admin.shared.liteModeNotice` (deployment guide), the "Learn More" link in
+  `admin.indexSettings.changesBanner.default.description`.
+- Licence and plan facts: `admin.billing.license.keyField`,
   `auth.impersonate.adminNote` (`@onyx.app` admins), `admin.externalApps.facts.providedByOnyx`.
 - Craft ("Onyx Craft", `admin.craft*`, `craft.*`, the `onyxBranded` logo): Onyx
   enables it per deployment.
