@@ -830,7 +830,8 @@ owner_admin() {
   local -a args
   section "vm-bootstrap owner ${owner} ${sha} $(date -u +%FT%TZ)"
   live_action_start "${sha}"
-  args=(--base-url "${LIVE_URL}" --owner "${owner}" --list)
+  # No --list here: the workflow log and its artifact must not carry the member emails.
+  args=(--base-url "${LIVE_URL}" --owner "${owner}")
   [[ "${invite}" == - ]] || args+=(--invite "${invite}")
   [[ "${invite_only}" == keep ]] || args+=(--invite-only "${invite_only}")
   python3 "${ONYX_SRC_DIR}/product/deploy/owner-admin.py" "${args[@]}"

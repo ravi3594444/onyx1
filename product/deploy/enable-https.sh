@@ -101,6 +101,10 @@ pass "options-ssl-nginx.conf and ssl-dhparams.pem are in ${certbot_dir}/conf."
 sed "s/\${DOMAIN}/${domain}/g" "${script_dir}/nginx/redirect.conf.template" >"${redirect_dir}/redirect.conf.template.tmp"
 mv "${redirect_dir}/redirect.conf.template.tmp" "${redirect_dir}/redirect.conf.template"
 rm -f "${redirect_dir}/redirect.conf"
+# A bind mount of a missing file leaves an empty directory behind. Remove it first.
+if [[ -d "${redirect_dir}/render-redirect.sh" ]]; then
+  rmdir "${redirect_dir}/render-redirect.sh" || die "${redirect_dir}/render-redirect.sh is a directory that is not empty."
+fi
 install -m 0644 "${script_dir}/nginx/render-redirect.sh" "${redirect_dir}/render-redirect.sh"
 pass "redirect block for ${domain} is in ${redirect_dir}/redirect.conf.template."
 
