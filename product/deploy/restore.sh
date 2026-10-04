@@ -21,9 +21,10 @@ env_file="${compose_dir}/.env"
 env_backup="${backup_dir}/env.backup"
 secrets=(USER_AUTH_SECRET ENCRYPTION_KEY_SECRET POSTGRES_PASSWORD OPENSEARCH_ADMIN_PASSWORD
   S3_AWS_ACCESS_KEY_ID S3_AWS_SECRET_ACCESS_KEY MINIO_ROOT_USER MINIO_ROOT_PASSWORD)
-# Settings that change the credentials, the data services or the files that Compose reads.
+# Settings that change the credentials, the data services or the env file that Compose reads.
+# COMPOSE_FILE is allowed: it only adds overlay files, for example compose.override.yml.
 overrides=(POSTGRES_USER POSTGRES_HOST OPENSEARCH_HOST REDIS_HOST S3_ENDPOINT_URL FILE_STORE_BACKEND
-  COMPOSE_FILE COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE)
+  COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE)
 
 die() {
   echo "ERROR: $*" >&2

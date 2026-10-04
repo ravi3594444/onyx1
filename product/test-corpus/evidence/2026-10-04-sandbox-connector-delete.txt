@@ -1,0 +1,12 @@
+# Whole-connector deletion test, 2026-10-04T09:47:40Z, cc-pair 4
+search before: ['expense-policy.md', 'refund-policy-2026.md', 'whatsapp-assistant-product-guide.md']
+pause: 200
+deletion-attempt: 200
+cc-pair 4 returns 404 after 20 s
+search after: []
+# Whole-connector deletion test, 2026-10-04T10:08:26Z, cc-pair 5
+search before: ['expense-policy.md', 'refund-policy-2026.md', 'whatsapp-assistant-product-guide.md']
+pause: 200
+deletion-attempt: 200
+cc-pair 5 returns 404 after 3 s
+search after: []
