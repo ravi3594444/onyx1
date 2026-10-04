@@ -16,8 +16,9 @@ on:
     branches: [main]
 
 # One deploy at a time. A queued deploy waits and is not cancelled.
+# Shared VM lock with axi-bootstrap-dev.yml: one operation on the VM at a time.
 concurrency:
-  group: deploy-dev
+  group: bootstrap-dev
   cancel-in-progress: false
 
 permissions:

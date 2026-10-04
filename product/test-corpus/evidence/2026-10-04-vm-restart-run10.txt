@@ -1,0 +1,324 @@
+# Bootstrap dev VM run 10 (restart), commit 6fdf9226c1fe2598316356aae715416c405f3d96, GitHub Actions job 111450727684
+# https://github.com/ravi3594444/onyx1/actions/runs/37207190196
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: restart
+  WEB_DOMAIN: https://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T135252Z-restart
+
+== vm-bootstrap restart 6fdf9226c1fe2598316356aae715416c405f3d96 2026-10-04T13:52:52Z ==
+State of the last verify: /srv/onyx/evidence/20261004T133915Z/state.json
+http://localhost/api/health answers 200.
+
+== source at 6fdf9226c1fe2598316356aae715416c405f3d96 ==
+6fdf9226c1fe2598316356aae715416c405f3d96 2026-10-04T13:38:51+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': public-url step and health diagnostics
+
+== containers before ==
+onyx-api_server-1 5f55e2f4d78b Up 6 minutes (healthy)
+onyx-background-1 dd218ac13e1c Up 6 minutes
+onyx-cache-1 f24866bd8ebb Up 6 minutes
+onyx-certbot-1 2b70c889139b Up 6 minutes
+onyx-indexing_model_server-1 09dd2f3dff54 Up 6 minutes (healthy)
+onyx-inference_model_server-1 b24779d13668 Up 6 minutes (healthy)
+onyx-minio-1 a9817fd34cda Up 6 minutes (healthy)
+onyx-nginx-1 b3ed2abe24c3 Up 5 minutes (healthy)
+onyx-opensearch-1 59eb2adfd082 Up 6 minutes
+onyx-relational_db-1 3e2446793a50 Up 6 minutes (healthy)
+onyx-web_server-1 0db67540ab66 Up 6 minutes (healthy)
+
+== step down ==
+ Container onyx-certbot-1 Stopping
+ Container onyx-background-1 Stopping
+ Container onyx-nginx-1 Stopping
+ Container onyx-certbot-1 Stopped
+ Container onyx-certbot-1 Removing
+ Container onyx-certbot-1 Removed
+ Container onyx-nginx-1 Stopped
+ Container onyx-nginx-1 Removing
+ Container onyx-nginx-1 Removed
+ Container onyx-web_server-1 Stopping
+ Container onyx-background-1 Stopped
+ Container onyx-background-1 Removing
+ Container onyx-web_server-1 Stopped
+ Container onyx-web_server-1 Removing
+ Container onyx-background-1 Removed
+ Container onyx-indexing_model_server-1 Stopping
+ Container onyx-web_server-1 Removed
+ Container onyx-api_server-1 Stopping
+ Container onyx-indexing_model_server-1 Stopped
+ Container onyx-indexing_model_server-1 Removing
+ Container onyx-indexing_model_server-1 Removed
+ Container onyx-api_server-1 Stopped
+ Container onyx-api_server-1 Removing
+ Container onyx-api_server-1 Removed
+ Container onyx-inference_model_server-1 Stopping
+ Container onyx-minio-1 Stopping
+ Container onyx-opensearch-1 Stopping
+ Container onyx-cache-1 Stopping
+ Container onyx-relational_db-1 Stopping
+ Container onyx-cache-1 Stopped
+ Container onyx-cache-1 Removing
+ Container onyx-cache-1 Removed
+ Container onyx-relational_db-1 Stopped
+ Container onyx-relational_db-1 Removing
+ Container onyx-minio-1 Stopped
+ Container onyx-minio-1 Removing
+ Container onyx-relational_db-1 Removed
+ Container onyx-minio-1 Removed
+ Container onyx-opensearch-1 Stopped
+ Container onyx-opensearch-1 Removing
+ Container onyx-opensearch-1 Removed
+ Container onyx-inference_model_server-1 Stopped
+ Container onyx-inference_model_server-1 Removing
+ Container onyx-inference_model_server-1 Removed
+ Network onyx_default Removing
+ Network onyx_default Removed
+-- step down: exit 0
+
+== step up ==
+ Network onyx_default Creating
+ Network onyx_default Creating
+ Network onyx_default Created
+ Network onyx_default Created
+ Container onyx-relational_db-1 Creating
+ Container onyx-cache-1 Creating
+ Container onyx-certbot-1 Creating
+ Container onyx-minio-1 Creating
+ Container onyx-opensearch-1 Creating
+ Container onyx-indexing_model_server-1 Creating
+ Container onyx-inference_model_server-1 Creating
+ Container onyx-relational_db-1 Created
+ Container onyx-opensearch-1 Created
+ Container onyx-certbot-1 Created
+ Container onyx-minio-1 Created
+ Container onyx-cache-1 Created
+ Container onyx-indexing_model_server-1 Created
+ Container onyx-inference_model_server-1 Created
+ Container onyx-api_server-1 Creating
+ Container onyx-background-1 Creating
+ Container onyx-api_server-1 Created
+ Container onyx-web_server-1 Creating
+ Container onyx-background-1 Created
+ Container onyx-web_server-1 Created
+ Container onyx-nginx-1 Creating
+ Container onyx-nginx-1 Created
+ Container onyx-cache-1 Starting
+ Container onyx-opensearch-1 Starting
+ Container onyx-relational_db-1 Starting
+ Container onyx-indexing_model_server-1 Starting
+ Container onyx-inference_model_server-1 Starting
+ Container onyx-certbot-1 Starting
+ Container onyx-minio-1 Starting
+ Container onyx-cache-1 Started
+ Container onyx-opensearch-1 Started
+ Container onyx-relational_db-1 Started
+ Container onyx-indexing_model_server-1 Started
+ Container onyx-inference_model_server-1 Started
+ Container onyx-background-1 Starting
+ Container onyx-background-1 Started
+ Container onyx-certbot-1 Started
+ Container onyx-minio-1 Started
+ Container onyx-api_server-1 Starting
+ Container onyx-api_server-1 Started
+ Container onyx-web_server-1 Starting
+ Container onyx-web_server-1 Started
+ Container onyx-web_server-1 Waiting
+ Container onyx-api_server-1 Waiting
+ Container onyx-web_server-1 Healthy
+ Container onyx-api_server-1 Healthy
+ Container onyx-nginx-1 Starting
+ Container onyx-nginx-1 Started
+-- step up: exit 0
+
+== step health ==
+http://localhost/api/health answers 200.
+-- step health: exit 0
+
+== step public-url ==
+ERROR: https://my-knowledge.duckdns.org/api/health answers 301, not 200.
+-- curl https://my-knowledge.duckdns.org/api/health
+*  issuer: C=US; O=Let's Encrypt; CN=YE1
+*  SSL certificate verify ok.
+* TLSv1.2 (OUT), TLS header, Supplemental data (23):
+> GET /api/health HTTP/1.1
+> Host: my-knowledge.duckdns.org
+> User-Agent: curl/7.81.0
+> Accept: */*
+>
+* TLSv1.2 (IN), TLS header, Supplemental data (23):
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+* TLSv1.2 (IN), TLS header, Supplemental data (23):
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+* old SSL session ID is stale, removing
+* TLSv1.2 (IN), TLS header, Supplemental data (23):
+* Mark bundle as not supporting multiuse
+< HTTP/1.1 301 Moved Permanently
+< Server: nginx
+< Date: Sun, 04 Oct 2026 13:55:18 GMT
+< Content-Type: text/html
+< Content-Length: 162
+< Connection: keep-alive
+< Location: https://my-knowledge.duckdns.org/api/health
+<
+* Connection #0 to host my-knowledge.duckdns.org left intact
+http_code=301 ssl_verify_result=0 remote_ip=*** time_total=0.038952
+onyx-api_server-1 Up About a minute (healthy)
+onyx-background-1 Up About a minute
+onyx-cache-1 Up 2 minutes 6379/tcp
+onyx-certbot-1 Up About a minute 80/tcp, 443/tcp
+onyx-indexing_model_server-1 Up 2 minutes (healthy)
+onyx-inference_model_server-1 Up 2 minutes (healthy)
+onyx-minio-1 Up About a minute (healthy) 9000/tcp
+onyx-nginx-1 Up About a minute (healthy) 0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp
+onyx-opensearch-1 Up 2 minutes 9200/tcp, 9300/tcp, 9600/tcp, 9650/tcp
+onyx-relational_db-1 Up 2 minutes (healthy) 5432/tcp
+onyx-web_server-1 Up About a minute (healthy)
+nginx-1  | 2026/10/04 13:54:48 [error] 17#17: *147 connect() failed (111: Connection refused) while connecting to upstream, client: ***, server: , request: "GET /api/health HTTP/1.1", upstream: "http://[::1]:80/api/health", host: "my-knowledge.duckdns.org"
+nginx-1  | 2026/10/04 13:54:48 [warn] 17#17: *147 upstream server temporarily disabled while connecting to upstream, client: ***, server: , request: "GET /api/health HTTP/1.1", upstream: "http://[::1]:80/api/health", host: "my-knowledge.duckdns.org"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:54:48 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:54:48 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:54:53 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:54:53 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:54:58 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:54:58 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:55:03 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:55:03 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:55:08 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:55:08 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 2026/10/04 13:55:13 [error] 17#17: *164 connect() failed (111: Connection refused) while connecting to upstream, client: ***, server: , request: "GET /api/health HTTP/1.1", upstream: "http://[::1]:80/api/health", host: "my-knowledge.duckdns.org"
+nginx-1  | 2026/10/04 13:55:13 [warn] 17#17: *164 upstream server temporarily disabled while connecting to upstream, client: ***, server: , request: "GET /api/health HTTP/1.1", upstream: "http://[::1]:80/api/health", host: "my-knowledge.duckdns.org"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:55:13 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:55:13 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:55:18 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:55:18 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:55:18 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:55:18 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+-- step public-url: exit 1
+
+== containers after ==
+onyx-api_server-1 be8e0ddf9ebc Up About a minute (healthy)
+onyx-background-1 d205205671ee Up 2 minutes
+onyx-cache-1 ed8d640ed51c Up 2 minutes
+onyx-certbot-1 8064e00502d0 Up 2 minutes
+onyx-indexing_model_server-1 3ec929a78214 Up 2 minutes (healthy)
+onyx-inference_model_server-1 3503f0c74dd8 Up 2 minutes (healthy)
+onyx-minio-1 8399c459d1a5 Up About a minute (healthy)
+onyx-nginx-1 029d4827cb15 Up About a minute (healthy)
+onyx-opensearch-1 b79fa7c2a8cf Up 2 minutes
+onyx-relational_db-1 46383f5db970 Up 2 minutes (healthy)
+onyx-web_server-1 dfa635ef6895 Up About a minute (healthy)
+volumes: onyx_api_server_logs onyx_background_logs onyx_db_volume onyx_file-system onyx_indexing_huggingface_model_cache onyx_indexing_model_server_logs onyx_inference_model_server_logs onyx_minio_data onyx_model_cache_huggingface onyx_opensearch-data
+
+== step volumes-kept ==
+-- step volumes-kept: exit 0
+
+== step search ==
+PASS search Q1 as user-a@example.com: {"expected_top": "expense-policy.md", "seconds": 19.64, "top_titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md"]}
+PASS search Q2 as user-a@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.25, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search Q3 as user-a@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.22, "top_titles": ["refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q4 as user-a@example.com: {"expected_top": null, "seconds": 0.21, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "refund-policy-2026.md", "expense-policy.md"]}
+PASS search Q5 as user-a@example.com: {"expected_top": null, "seconds": 0.22, "top_titles": ["expense-policy.md", "expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner user-b@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from user-a@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+-- step search: exit 0
+
+== step privacy ==
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 2, "name": "HR private", "description": null, "created_at": "2026-10-04T13:41:17.541351Z", "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "instructions": null, "chat_sessions": []}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "575f4732-adf3-4e9c-9a45-0374c7cae681", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "file_id": "aade0437-5c1e-4093-b5a9-1086858cf4fa", "created_at": "2026-10-04T13:41:17.908559", "status": "COMPLETED", "last_accessed_at": "2026-10-04T13:41:17.906268Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 0, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file 575f4732-adf3-4e9c-9a45-0374c7cae681: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+-- step privacy: exit 0
+
+== docker stats ==
+CONTAINER ID   NAME                            CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O         PIDS
+029d4827cb15   onyx-nginx-1                    0.00%     7.766MiB / 15.61GiB   0.05%     237kB / 389kB     0B / 61.4kB       10
+dfa635ef6895   onyx-web_server-1               0.00%     99.84MiB / 15.61GiB   0.62%     5.04kB / 2.54kB   1.38MB / 0B       11
+d205205671ee   onyx-background-1               4.72%     1.913GiB / 15.61GiB   12.25%    4.04MB / 2.08MB   20.5MB / 88.1MB   66
+be8e0ddf9ebc   onyx-api_server-1               0.24%     582.8MiB / 15.61GiB   3.65%     550kB / 877kB     2.52MB / 105MB    10
+3503f0c74dd8   onyx-inference_model_server-1   0.20%     673.1MiB / 15.61GiB   4.21%     170kB / 106kB     82.2MB / 42.2MB   20
+3ec929a78214   onyx-indexing_model_server-1    0.20%     329.2MiB / 15.61GiB   2.06%     3kB / 126B        2.17MB / 28.9MB   9
+ed8d640ed51c   onyx-cache-1                    0.93%     4.227MiB / 15.61GiB   0.03%     1.66MB / 3.63MB   0B / 0B           6
+8399c459d1a5   onyx-minio-1                    0.00%     215.6MiB / 15.61GiB   1.35%     9.62kB / 5.32kB   807kB / 147kB     11
+8064e00502d0   onyx-certbot-1                  0.00%     1008KiB / 15.61GiB    0.01%     2.6kB / 126B      16.4kB / 4.07MB   2
+46383f5db970   onyx-relational_db-1            0.02%     145.5MiB / 15.61GiB   0.91%     1e+03kB / 670kB   2.49MB / 479kB    60
+b79fa7c2a8cf   onyx-opensearch-1               1.18%     2.551GiB / 15.61GiB   16.34%    197kB / 136kB     3.48MB / 15.7MB   104
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989        7054        5500          24        3434        8415
+Swap:              0           0           0
+
+== summary ==
+step             exit code
+down             0
+up               0
+health           0
+public-url       1
+volumes-kept     0
+search           0
+privacy          0
+RESULT: FAIL (one or more steps did not exit with 0)
+##[error]Process completed with exit code 1.
