@@ -6,6 +6,7 @@
 # It copies compose.https.yml next to docker-compose.yml, so that nginx publishes ports 80
 # and 443 only. Certificate issuance needs port 80 reachable from the internet.
 # STAGING=1 requests a Let's Encrypt staging certificate (no rate limits, not trusted).
+# A later run without STAGING=1 replaces a staging certificate with a trusted one.
 # The script never removes containers, volumes or other .env values.
 set -euo pipefail
 
@@ -119,7 +120,7 @@ until [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://localhos
 done
 pass "nginx answers on port 80."
 
-# --- 5. Issue the real certificate if the dummy is in place --------------------------------------
+# --- 5. Issue a trusted certificate if the dummy or a staging certificate is in place ---
 issuer="$(in_certbot "openssl x509 -in '${live}/fullchain.pem' -noout -issuer" 2>/dev/null || true)"
 if [[ "${issuer}" == *"CN=localhost"* || "${issuer}" == *"CN = localhost"* ]]; then
   echo "The certificate is the dummy. Requesting a Let's Encrypt certificate for ${domain}."
@@ -132,6 +133,15 @@ if [[ "${issuer}" == *"CN=localhost"* || "${issuer}" == *"CN = localhost"* ]]; t
     die "certbot did not issue a certificate. Check that port 80 of ${domain} is reachable from the internet."
   compose exec nginx nginx -s reload
   pass "Let's Encrypt certificate issued. nginx reloaded."
+elif [[ "${issuer}" == *"(STAGING)"* && "${STAGING:-0}" != 1 ]]; then
+  # Keep the staging files until the trusted certificate replaces them, so nginx can restart.
+  echo "The certificate is from the Let's Encrypt staging CA. Replacing it with a trusted one."
+  compose run --rm --no-deps --entrypoint certbot certbot certonly --webroot -w /var/www/certbot \
+    -d "${domain}" --email "${email}" --agree-tos --no-eff-email --rsa-key-size "${rsa_key_size}" \
+    --non-interactive --force-renewal ||
+    die "certbot did not replace the staging certificate. The staging certificate stays in place."
+  compose exec nginx nginx -s reload
+  pass "Trusted Let's Encrypt certificate issued. nginx reloaded."
 else
   pass "The certificate is not the dummy (${issuer:-issuer unknown}). No issuance needed."
 fi
