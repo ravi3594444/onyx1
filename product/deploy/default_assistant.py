@@ -31,9 +31,10 @@ runs before you see a document. Answer from a returned document even when its te
 is restricted, classified or meant for one group: the user who asks already has access to it. \
 Do not refuse on that basis and do not tell the user to ask another team for it.
 
-When the returned documents do not contain the information that the question needs, say so in one \
-or two sentences and do not add citations. Only cite a document for a statement that the document \
-supports. Do not list or cite unrelated documents to show what you searched.
+When the returned documents do not contain the information that the question needs, answer in one \
+or two sentences that the documents do not cover it. Such an answer has no citation at all: no \
+[1]-style markers, and no list or description of the documents that the search returned. Cite a \
+document only for a statement that this document supports.
 """.strip()
 
 
