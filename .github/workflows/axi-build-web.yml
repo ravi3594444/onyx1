@@ -28,6 +28,10 @@ jobs:
     name: Build and push the web image
     if: github.repository == 'ravi3594444/onyx1'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [single, cloud]
     timeout-minutes: 60
     permissions:
       contents: read
@@ -47,41 +51,50 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # single: the live single-tenant stack. cloud: NEXT_PUBLIC_CLOUD_ENABLED=true for the
+      # multi-tenant stack (a build-time value, so two images).
       - name: Build the image
         env:
           RUN_NUMBER: ${{ github.run_number }}
+          VARIANT: ${{ matrix.variant }}
         run: |
-          product/branding/build-web-image.sh \
-            --tag "${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}" \
-            --tag "${IMAGE}:${GITHUB_SHA}" | tee "${RUNNER_TEMP}/build.log"
+          suffix=""
+          cloud_flag=()
+          if [[ "${VARIANT}" == cloud ]]; then suffix="-cloud"; cloud_flag=(--cloud); fi
+          echo "SUFFIX=${suffix}" >>"${GITHUB_ENV}"
+          product/branding/build-web-image.sh "${cloud_flag[@]}" \
+            --tag "${IMAGE}:${ONYX_RELEASE_TAG}-axi${suffix}.${RUN_NUMBER}" \
+            --tag "${IMAGE}:${GITHUB_SHA}${suffix}" | tee "${RUNNER_TEMP}/build.log"
       - name: Push the image
         env:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
-          docker push "${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}"
-          docker push "${IMAGE}:${GITHUB_SHA}"
-          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:${GITHUB_SHA}")"
+          docker push "${IMAGE}:${ONYX_RELEASE_TAG}-axi${SUFFIX}.${RUN_NUMBER}"
+          docker push "${IMAGE}:${GITHUB_SHA}${SUFFIX}"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:${GITHUB_SHA}${SUFFIX}")"
           digest="${digest#*@}"
           if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::No digest for the pushed image."
             exit 1
           fi
-          echo "${digest}" >"${RUNNER_TEMP}/image-digest.txt"
+          echo "${digest}" >"${RUNNER_TEMP}/image-digest${SUFFIX}.txt"
+          var=ONYX_WEB_SERVER_IMAGE
+          [[ -z "${SUFFIX}" ]] || var=ONYX_WEB_SERVER_IMAGE_MT
           {
-            echo "## Web image ${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}"
+            echo "## Web image ${ONYX_RELEASE_TAG}-axi${SUFFIX}.${RUN_NUMBER}"
             echo
             echo "Digest: \`${digest}\`"
             echo
-            echo "Tags: \`${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}\`, \`${IMAGE}:${GITHUB_SHA}\`"
+            echo "Tags: \`${IMAGE}:${ONYX_RELEASE_TAG}-axi${SUFFIX}.${RUN_NUMBER}\`, \`${IMAGE}:${GITHUB_SHA}${SUFFIX}\`"
             echo
             echo "Deploy: set in product/deploy/release.env"
             echo
             echo '```'
-            echo "ONYX_WEB_SERVER_IMAGE=${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}@${digest}"
+            echo "${var}=${IMAGE}:${ONYX_RELEASE_TAG}-axi${SUFFIX}.${RUN_NUMBER}@${digest}"
             echo '```'
           } >>"${GITHUB_STEP_SUMMARY}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v4
         with:
-          name: image-digest
-          path: ${{ runner.temp }}/image-digest.txt
+          name: image-digest-${{ matrix.variant }}
+          path: ${{ runner.temp }}/image-digest*.txt
           retention-days: 90

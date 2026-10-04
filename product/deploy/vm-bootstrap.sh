@@ -9,10 +9,12 @@
 #        vm-bootstrap.sh model <full commit SHA> <litellm provider> <model id|list>
 #        vm-bootstrap.sh smtp <full commit SHA>
 #        vm-bootstrap.sh keygen
+#        vm-bootstrap.sh mt-up <full commit SHA> | mt-check <full commit SHA> [after-restart]
+#        vm-bootstrap.sh mt-restart <full commit SHA> | mt-down | mt-destroy
 # Layout on the VM: /srv/onyx-src (clone of the fork), /srv/onyx (release files, .env,
-# evidence), /srv/backups. See product/deploy/RUNBOOK.md.
-# The script never creates a second .env, never removes the live volumes and never
-# prints a secret. It needs python3 and curl; both are present on Debian and Ubuntu.
+# evidence), /srv/backups, /srv/onyx-mt (multi-tenant test stack). See product/deploy/RUNBOOK.md.
+# The script never creates a second .env for the live stack, never removes the live volumes
+# and never prints a secret. It needs python3 and curl; both are present on Debian and Ubuntu.
 set -euo pipefail
 
 # VM_BOOTSTRAP_SRV_ROOT replaces /srv only in local tests of this script.
@@ -66,7 +68,12 @@ main() {
     model) model_wrapper "$@" ;;
     smtp) smtp_setup "$@" ;;
     keygen) inbox_keygen ;;
-    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha>" ;;
+    mt-up) mt_up_wrapper "$@" ;;
+    mt-check) mt_check_wrapper "$@" ;;
+    mt-restart) mt_restart_wrapper "$@" ;;
+    mt-down) mt_down_wrapper "$@" ;;
+    mt-destroy) mt_destroy_wrapper "$@" ;;
+    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha> | keygen | mt-up <sha> | mt-check <sha> [after-restart] | mt-restart <sha> | mt-down | mt-destroy" ;;
   esac
 }
 
@@ -952,6 +959,284 @@ unseal_model_key() {
   (umask 077 && printf 'MODEL_API_KEY=%q\nMODEL_API_BASE=\n' "${plain}" >"${SECRETS_DIR}/model.env")
   rm -f "${SECRETS_DIR}/model.sealed"
   echo "Unsealed the model key into ${SECRETS_DIR}/model.env (value not shown)."
+}
+
+
+# ---------------------------------------------------------------- multi-tenant validation stack
+
+# A second, isolated stack with MULTI_TENANT=true, for validation only. Project onyx-mt has its
+# own containers, network and volumes; nginx listens only on 127.0.0.1:3200. It never reads or
+# changes the live .env or the volumes of project onyx. See product/deploy/mt/README.md.
+readonly MT_DIR="${SRV_ROOT}/onyx-mt"
+readonly MT_COMPOSE_DIR="${MT_DIR}/deployment/docker_compose"
+readonly MT_PROJECT=onyx-mt
+readonly MT_URL=http://127.0.0.1:3200
+readonly MT_WEB_DOMAIN=http://localhost:3200
+readonly MT_COMPOSE_FILES=(docker-compose.yml compose.override.yml compose.mt.yml)
+readonly MT_TAG_FILE="${MT_DIR}/mt-tag"
+readonly MT_SALT_FILE="${MT_DIR}/mt-salt"
+readonly MT_STATE_FILE="${MT_DIR}/mt_state.json"
+# MemAvailable that mt-up needs before it starts the stack: 6 GiB, in kB.
+readonly MT_MIN_AVAILABLE_KB=$((6 * 1024 * 1024))
+
+# Stops the script if the project name could address the live project.
+mt_project_guard() {
+  [[ "${MT_PROJECT}" == onyx-mt ]] || die "The multi-tenant project name must be onyx-mt, not ${MT_PROJECT}."
+}
+
+# The -f options are explicit, because sudo drops a COMPOSE_FILE value from the shell.
+mt_compose() {
+  mt_project_guard
+  local -a files=()
+  local file
+  for file in "${MT_COMPOSE_FILES[@]}"; do
+    files+=(-f "${file}")
+  done
+  (cd "${MT_COMPOSE_DIR}" && dk compose -p "${MT_PROJECT}" "${files[@]}" "$@")
+}
+
+mt_compose_files_present() {
+  local file
+  for file in "${MT_COMPOSE_FILES[@]}" .env; do
+    [[ -f "${MT_COMPOSE_DIR}/${file}" ]] || return 1
+  done
+}
+
+mt_containers() {
+  dk ps -aq --filter "label=com.docker.compose.project=${MT_PROJECT}"
+}
+
+# Sets one key in the multi-tenant .env (same method as make-env.sh). Plain values only.
+mt_env_pin() {
+  local key="$1" value="$2" env_file="${MT_COMPOSE_DIR}/.env"
+  if grep -qE "^#? ?${key}=" "${env_file}"; then
+    sed -i -E "s|^#? ?${key}=.*|${key}=${value}|" "${env_file}"
+  else
+    printf '%s=%s\n' "${key}" "${value}" >>"${env_file}"
+  fi
+}
+
+# Prints the last value of a key in the multi-tenant .env, without outer quotes.
+mt_env_value() {
+  sed -n -E "s/^[[:space:]]*${1}[[:space:]]*=[[:space:]]*//p" "${MT_COMPOSE_DIR}/.env" | tail -n 1 |
+    sed -E -e 's/[[:space:]]+$//' -e "s/^[\"'](.*)[\"']$/\1/"
+}
+
+# Settings that the multi-tenant mode needs in .env. No value is printed.
+mt_env_settings() {
+  # DEV_MODE lets an empty USER_AUTH_SECRET pass (onyx/auth/users.py:235). Never start so.
+  [[ -n "$(mt_env_value USER_AUTH_SECRET)" ]] ||
+    die "USER_AUTH_SECRET is empty in ${MT_COMPOSE_DIR}/.env. Set it with: openssl rand -hex 32"
+  # The schema_private migration creates a read-only Postgres role. The code default of the
+  # password is "password" (app_configs.py:2034-2036), so write a strong one once.
+  [[ -n "$(mt_env_value DB_READONLY_USER)" ]] || mt_env_pin DB_READONLY_USER db_readonly_user
+  if [[ -z "$(mt_env_value DB_READONLY_PASSWORD)" ]]; then
+    mt_env_pin DB_READONLY_PASSWORD "$(openssl rand -hex 24)"
+    echo "Wrote DB_READONLY_PASSWORD into ${MT_COMPOSE_DIR}/.env (value not shown)."
+  fi
+  # No tracking calls from a validation stack.
+  [[ -z "$(mt_env_value HUBSPOT_TRACKING_URL)" ]] ||
+    die "HUBSPOT_TRACKING_URL is set in ${MT_COMPOSE_DIR}/.env. Remove it."
+  echo "USER_AUTH_SECRET, DB_READONLY_USER and DB_READONLY_PASSWORD are set (values not shown)."
+}
+
+# Refuses to start when the VM has less than MT_MIN_AVAILABLE_KB free for a new stack.
+mt_memory_gate() {
+  local available
+  section "memory before start"
+  free -m
+  available="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+  [[ "${available}" =~ ^[0-9]+$ ]] || die "MemAvailable is not in /proc/meminfo."
+  echo "MemAvailable: $((available / 1024)) MiB. mt-up needs $((MT_MIN_AVAILABLE_KB / 1024)) MiB."
+  if [[ -n "$(dk ps -q --filter "label=com.docker.compose.project=${MT_PROJECT}")" ]]; then
+    echo "Project ${MT_PROJECT} runs already, so its memory is in use. The check does not apply."
+    return 0
+  fi
+  ((available >= MT_MIN_AVAILABLE_KB)) ||
+    die "Only $((available / 1024)) MiB of memory is available. The multi-tenant stack needs about 6 GiB next to the live stack. Nothing was started."
+}
+
+# Creates the folder, exports the release files and compose.mt.yml, and writes .env once.
+mt_prepare() {
+  local sha="$1"
+  section "multi-tenant folder ${MT_DIR}"
+  if [[ ! -d "${MT_DIR}" ]]; then
+    sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${MT_DIR}" ||
+      die "sudo -n cannot create ${MT_DIR}."
+  fi
+  checkout_source "${sha}"
+  export_release_files "${MT_COMPOSE_DIR}" "${sha}"
+  git -C "${ONYX_SRC_DIR}" show "${sha}:product/deploy/mt/compose.mt.yml" >"${MT_COMPOSE_DIR}/compose.mt.yml"
+  echo "Exported compose.mt.yml."
+  if [[ -f "${MT_COMPOSE_DIR}/.env" ]]; then
+    echo "${MT_COMPOSE_DIR}/.env exists. The script keeps it."
+  else
+    # New secrets. The live .env is never copied.
+    "${ONYX_SRC_DIR}/product/deploy/make-env.sh" "${MT_COMPOSE_DIR}" "${MT_WEB_DOMAIN}"
+  fi
+  if [[ -f "${COMPOSE_DIR}/.env" ]] && cmp -s "${COMPOSE_DIR}/.env" "${MT_COMPOSE_DIR}/.env"; then
+    die "${MT_COMPOSE_DIR}/.env is a copy of the live .env. Remove it; mt-up then writes new secrets."
+  fi
+  # A plain "docker compose" in this folder then also addresses onyx-mt, never onyx.
+  mt_env_pin COMPOSE_PROJECT_NAME "${MT_PROJECT}"
+  mt_env_pin COMPOSE_FILE "$(
+    IFS=:
+    echo "${MT_COMPOSE_FILES[*]}"
+  )"
+  echo "Set COMPOSE_PROJECT_NAME and COMPOSE_FILE in ${MT_COMPOSE_DIR}/.env."
+  mt_env_settings
+}
+
+mt_report() {
+  show "docker compose ps (${MT_PROJECT})" mt_compose ps
+  show "docker stats" dk stats --no-stream
+  show "memory" free -m
+}
+
+mt_up_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence mt-up mt_up "${sha}"
+}
+
+mt_up() {
+  local sha="$1"
+  section "vm-bootstrap mt-up ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  mt_memory_gate
+  mt_prepare "${sha}"
+  section "docker compose -p ${MT_PROJECT} pull"
+  mt_compose pull --quiet
+  section "docker compose -p ${MT_PROJECT} up -d"
+  mt_compose up -d
+  wait_health "${MT_URL}"
+  show "file store bucket job" mt_compose logs --no-log-prefix mt_minio_bucket
+  mt_report
+  section "mt-up complete: ${sha} with $(release_value ONYX_RELEASE_TAG) at ${MT_URL}"
+}
+
+# Creates the tag and the password salt once. The salt is never printed.
+mt_ensure_secrets() {
+  local tag
+  if [[ ! -s "${MT_TAG_FILE}" ]]; then
+    echo "mt-$(openssl rand -hex 4)" >"${MT_TAG_FILE}"
+    echo "Created ${MT_TAG_FILE}."
+  fi
+  if [[ ! -s "${MT_SALT_FILE}" ]]; then
+    (umask 077 && openssl rand -hex 32 >"${MT_SALT_FILE}")
+    echo "Created ${MT_SALT_FILE} (mode 600, value not shown)."
+  fi
+  chmod 600 "${MT_SALT_FILE}"
+  tag="$(cat "${MT_TAG_FILE}")"
+  [[ "${tag}" =~ ^[a-z0-9][a-z0-9-]{0,23}$ ]] || die "${MT_TAG_FILE} does not hold a valid tag."
+  echo "Tag: ${tag}"
+}
+
+# Runs mt_checks.py against the multi-tenant stack. Mode: empty or after-restart.
+mt_run_checks() {
+  local mode="${1:-}" checks="${ONYX_SRC_DIR}/product/test-corpus/mt_checks.py" tag
+  [[ -f "${checks}" ]] || { echo "ERROR: ${checks} is missing at this commit." >&2; return 1; }
+  mt_ensure_secrets
+  tag="$(cat "${MT_TAG_FILE}")"
+  local -a args=(--base-url "${MT_URL}" --tag "${tag}" --state "${MT_STATE_FILE}")
+  [[ "${mode}" != after-restart ]] || args+=(--after-restart)
+  MT_PASSWORD_SALT="$(cat "${MT_SALT_FILE}")" python3 "${checks}" "${args[@]}"
+}
+
+mt_check_wrapper() {
+  local sha="${1:-}" mode="${2:-}"
+  check_sha "${sha}"
+  [[ -z "${mode}" || "${mode}" == after-restart ]] || die "The second argument must be after-restart or empty."
+  with_evidence mt-check mt_check "${sha}" "${mode}"
+}
+
+mt_check() {
+  local sha="$1" mode="$2"
+  section "vm-bootstrap mt-check ${sha} $(date -u +%FT%TZ) (mode=${mode:-first})"
+  [[ -f "${MT_COMPOSE_DIR}/.env" ]] || die "${MT_COMPOSE_DIR}/.env is missing. Run the mt-up action first."
+  wait_health "${MT_URL}" 60 || die "The multi-tenant stack is not healthy. Run the mt-up action first."
+  checkout_source "${sha}"
+  mt_run_checks "${mode}"
+}
+
+mt_restart_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence mt-restart mt_restart "${sha}"
+}
+
+# Recreates the multi-tenant containers and repeats the read checks. "down" never gets -v.
+mt_restart() {
+  local sha="$1" volumes_before volumes_after
+  section "vm-bootstrap mt-restart ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  mt_compose_files_present || die "The files in ${MT_COMPOSE_DIR} are missing. Run the mt-up action first."
+  [[ -f "${MT_STATE_FILE}" ]] || die "${MT_STATE_FILE} is missing. Run the mt-check action first."
+  wait_health "${MT_URL}" 60 || die "The multi-tenant stack is not healthy before the restart."
+  checkout_source "${sha}"
+
+  volumes_before="$(dk volume ls -q --filter "label=com.docker.compose.project=${MT_PROJECT}" | sort)"
+  show "containers before" mt_compose ps --format '{{.Name}} {{.ID}} {{.Status}}'
+  run_step down mt_compose down
+  run_step up mt_compose up -d
+  run_step health wait_health "${MT_URL}"
+  show "containers after" mt_compose ps --format '{{.Name}} {{.ID}} {{.Status}}'
+  volumes_after="$(dk volume ls -q --filter "label=com.docker.compose.project=${MT_PROJECT}" | sort)"
+  echo "volumes: ${volumes_after//$'\n'/ }"
+  run_step volumes-kept test -n "${volumes_after}" -a "${volumes_before}" = "${volumes_after}"
+  run_step mt-check-after-restart mt_run_checks after-restart
+  mt_report
+  summary
+}
+
+mt_down_wrapper() {
+  [[ $# -eq 0 ]] || die "mt-down takes no arguments."
+  with_evidence mt-down mt_down
+}
+
+# Stops and removes the containers. The volumes stay for inspection; mt-destroy removes them.
+mt_down() {
+  section "vm-bootstrap mt-down $(date -u +%FT%TZ)"
+  docker_setup
+  if mt_compose_files_present; then
+    mt_compose down
+  elif [[ -n "$(mt_containers)" ]]; then
+    die "Project ${MT_PROJECT} has containers, but the files in ${MT_COMPOSE_DIR} are missing. Run mt-up or mt-destroy."
+  else
+    echo "Project ${MT_PROJECT} has no containers."
+  fi
+  show "volumes kept (${MT_PROJECT})" dk volume ls --filter "label=com.docker.compose.project=${MT_PROJECT}"
+  show "memory" free -m
+}
+
+mt_destroy_wrapper() {
+  [[ $# -eq 0 ]] || die "mt-destroy takes no arguments."
+  with_evidence mt-destroy mt_destroy
+}
+
+# Removes the containers, the network and the volumes of project onyx-mt, and its check state.
+# .env, the tag and the salt stay, so a new mt-up uses the same secrets.
+mt_destroy() {
+  local containers volumes volume
+  section "vm-bootstrap mt-destroy $(date -u +%FT%TZ)"
+  mt_project_guard
+  docker_setup
+  if mt_compose_files_present; then
+    mt_compose down
+  fi
+  containers="$(mt_containers)"
+  [[ -z "${containers}" ]] || xargs -r "${DOCKER_CMD[@]}" rm -f <<<"${containers}" >/dev/null
+  volumes="$(dk volume ls -q --filter "label=com.docker.compose.project=${MT_PROJECT}")"
+  # The label filter is exact. The name check is a second guard for the live volumes.
+  while IFS= read -r volume; do
+    [[ -z "${volume}" || "${volume}" == "${MT_PROJECT}_"* ]] ||
+      die "Volume ${volume} has the label of ${MT_PROJECT} but not its name prefix. Nothing more is removed."
+  done <<<"${volumes}"
+  [[ -z "${volumes}" ]] || xargs -r "${DOCKER_CMD[@]}" volume rm <<<"${volumes}" >/dev/null
+  dk network rm "${MT_PROJECT}_default" >/dev/null 2>&1 || true
+  rm -f "${MT_STATE_FILE}"
+  echo "Project ${MT_PROJECT} has no containers and no volumes. Removed ${MT_STATE_FILE}."
+  show "volumes left (${MT_PROJECT})" dk volume ls --filter "label=com.docker.compose.project=${MT_PROJECT}"
 }
 
 main "$@"

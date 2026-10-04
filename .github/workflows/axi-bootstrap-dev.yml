@@ -5,6 +5,8 @@ name: Bootstrap dev VM
 # and privacy checks. https, https-staging: Let's Encrypt for my-knowledge.duckdns.org.
 # owner: admin access, invitation, invite-only sign-up. model: hosted LLM provider.
 # smtp: mail settings. The model and smtp actions read environment secrets.
+# mt-*: a separate multi-tenant validation stack (project onyx-mt, 127.0.0.1:3200).
+# mt-down keeps its volumes; mt-destroy removes them. See product/deploy/mt/README.md.
 # See product/deploy/RUNBOOK.md.
 
 on:
@@ -27,6 +29,12 @@ on:
           - model
           - smtp
           - keygen
+          - mt-up
+          - mt-check
+          - mt-check-after-restart
+          - mt-restart
+          - mt-down
+          - mt-destroy
       web_domain:
         description: Public URL of the stack (install only, for a new .env)
         type: string
@@ -209,6 +217,12 @@ jobs:
               ;;
             smtp) args="smtp ${GITHUB_SHA}" ;;
             keygen) args="keygen" ;;
+            mt-up) args="mt-up ${GITHUB_SHA}" ;;
+            mt-check) args="mt-check ${GITHUB_SHA}" ;;
+            mt-check-after-restart) args="mt-check ${GITHUB_SHA} after-restart" ;;
+            mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
+            mt-down) args="mt-down" ;;
+            mt-destroy) args="mt-destroy" ;;
             *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
           esac
           if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
