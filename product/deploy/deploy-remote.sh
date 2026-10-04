@@ -55,6 +55,10 @@ main() {
     tar -x -C "${stage}"
   git -C "${src_dir}" show "${sha}:product/deploy/compose.override.yml" \
     >"${stage_compose}/compose.override.yml"
+  # The HTTPS overlay (RUNBOOK.md, section 3a). COMPOSE_FILE in .env can name it, so the stage
+  # pull needs it too. A commit without the file leaves no empty file behind.
+  git -C "${src_dir}" show "${sha}:product/deploy/compose.https.yml" \
+    >"${stage_compose}/compose.https.yml" 2>/dev/null || rm -f "${stage_compose}/compose.https.yml"
   cp -p "${env_file}" "${stage_compose}/.env"
   set_env_value "${stage_compose}/.env" IMAGE_TAG "${tag}"
   set_env_value "${stage_compose}/.env" ONYX_BACKEND_IMAGE "${ONYX_BACKEND_IMAGE}"
@@ -73,6 +77,10 @@ main() {
 
   local port url deadline
   port="$(sed -n -E 's/^HOST_PORT=//p' "${env_file}" | tail -n 1)"
+  # With the HTTPS overlay, nginx publishes only ports 80 and 443.
+  if [[ "$(sed -n -E 's/^COMPOSE_FILE=//p' "${env_file}" | tail -n 1)" == *compose.https.yml* ]]; then
+    port=80
+  fi
   url="http://localhost:${port:-3000}/api/health"
   deadline=$((SECONDS + health_timeout))
   until curl -fsS -o /dev/null --max-time 10 "${url}"; do

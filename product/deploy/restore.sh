@@ -107,6 +107,9 @@ else
   install -m 600 "${env_backup}" "${env_file}"
 fi
 
+# The live .env can name compose.https.yml (RUNBOOK.md, section 3a). The restored copy is a
+# plain HTTP test on HOST_PORT, so the restore uses only the base file and our override.
+export COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml:compose.override.yml}"
 # create makes the project's volumes and containers without starting them.
 compose create
 for volume in "${volumes[@]}"; do

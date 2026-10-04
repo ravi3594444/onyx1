@@ -68,6 +68,68 @@ Do not use `onyx-cli deploy install --no-prompt`. Without a prompt it installs O
 which has no OpenSearch, no connectors and no vector search. If you use `onyx-cli`
 interactively, select "Standard".
 
+## 3a. HTTPS with Let's Encrypt
+
+The stack from section 3 serves plain HTTP on ports 80 and 3000. `enable-https.sh` adds the
+overlay `product/deploy/compose.https.yml`. The overlay gives nginx the upstream production
+setup: ports 80 and 443, the `../data/certbot` volumes and `app.conf.template.prod`. It
+removes the publish of port 3000, and it adds the upstream `certbot` service (pinned to
+`certbot/certbot:v5.8.0` by digest).
+
+Requirements:
+
+- A DNS `A` or `AAAA` record for the domain that points to the public IP of the VM.
+- Port 80 and port 443 of the VM open to the internet. Let's Encrypt validates the domain
+  over port 80 (`/.well-known/acme-challenge/`).
+
+Run the script from the fork checkout on the VM. It is idempotent: run it again after a
+failure, or to check the setup. Set `STAGING=1` to test with the Let's Encrypt staging
+service, which has no rate limits but gives an untrusted certificate.
+
+```bash
+product/deploy/enable-https.sh /srv/onyx/deployment/docker_compose kb.example.com admin@example.com
+```
+
+The script does these steps and prints a `PASS` or `FAIL` line for each check:
+
+1. Checks the domain, the email and that `getent hosts <domain>` gives the public IP of the
+   VM. If the DNS record is wrong, it stops before it changes a file.
+2. Copies `compose.https.yml` next to `docker-compose.yml`. Changes three keys in `.env`:
+   `DOMAIN=<domain>`, `WEB_DOMAIN=https://<domain>` and `COMPOSE_FILE`, which gets
+   `compose.https.yml` as the last file (`docker-compose.yml:compose.override.yml:compose.https.yml`).
+   It changes no other value.
+3. Downloads `options-ssl-nginx.conf` and `ssl-dhparams.pem` into `../data/certbot/conf`, as
+   the upstream `init-letsencrypt.sh` does. If no certificate exists, it writes a 1-day dummy
+   certificate (`CN=localhost`), so that nginx can start.
+4. Runs `docker compose up -d`. This recreates nginx with the production template and starts
+   `certbot`. Then it waits for `http://localhost/nginx-health`.
+5. If the certificate is the dummy, it removes it and runs `certbot certonly --webroot`. Then
+   it reloads nginx.
+6. Checks `https://<domain>/nginx-health` and `https://<domain>/api/health`. The upstream
+   template does not redirect HTTP to HTTPS: `http://<domain>/` also serves the app. The script
+   reports this as `INFO`. Give users the `https://` URL; `WEB_DOMAIN` makes the app build
+   its own links with `https://`.
+
+Renewal: the `certbot` service runs `certbot renew` every 12 hours. `run-nginx.sh` reloads
+nginx every 6 hours, so nginx uses a new certificate without a restart. Check with
+`docker compose logs certbot`.
+
+Deploys: `deploy-remote.sh` stages `compose.https.yml` from the deployed commit next to the
+live `.env` copy, so `docker compose pull` in the stage folder finds every file in
+`COMPOSE_FILE`. With the overlay active, the deploy health check uses port 80, because port
+3000 is no longer published. Section 9 then needs `--base-url http://localhost` or the HTTPS URL.
+
+Restore test (section 8): `restore.sh` copies `env.backup` to `.env`, and that file now
+has `COMPOSE_FILE` with `compose.https.yml`. The restore folder has no such file, and the
+overlay would also publish ports 80 and 443, which the live stack uses. Compose prefers the
+shell environment to `.env`, and `restore.sh` allows `COMPOSE_FILE` in the shell. So run the
+restore with the plain HTTP file list:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:compose.override.yml HOST_PORT=3100 HOST_PORT_80=8100 \
+  product/deploy/restore.sh /srv/backups/2026-10-04 /srv/onyx-restore/deployment/docker_compose onyx-restore
+```
+
 ## 4. Configuration decisions
 
 | Setting | Value | Reason |
