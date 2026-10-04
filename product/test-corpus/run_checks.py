@@ -214,8 +214,15 @@ class OnyxSession:
             raise SystemExit(f"base URL must use http or https: {base_url}")
         self.base_url = base_url.rstrip("/")
         self.email = email
+        # With an https WEB_DOMAIN, Onyx marks the session cookie Secure. The checks also run
+        # over loopback on the stack's own host, which browsers treat as a secure context too.
+        host = urllib.parse.urlparse(base_url).hostname or ""
+        secure_protocols = ("https", "wss")
+        if host in ("localhost", "127.0.0.1", "::1"):
+            secure_protocols = ("https", "wss", "http")
+        policy = http.cookiejar.DefaultCookiePolicy(secure_protocols=secure_protocols)
         self.opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar(policy))
         )
         form = urllib.parse.urlencode({"username": email, "password": password})
         status, data = self.request(
