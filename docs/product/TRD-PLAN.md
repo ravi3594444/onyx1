@@ -296,7 +296,12 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | 8 | verify | `43859e1` | FAIL before the first check: `https://<domain>/api/health` answered no 200 from the VM (the redirect loop). |
 | 9 | verify | `6fdf922` | All 14 functional steps PASS, including backup and the isolated restore. The new `public-url` step FAIL with the diagnosis: the upstream HTTPS block proxies to `localhost:80` with the domain as Host, and the redirect block answered 301. Fixed in `988982d` (`...vm-verify-run9.txt`). |
 | 10 | restart | `6fdf922` | `down`, `up -d`, health, the same 10 volumes, `search` 8 of 8 and `privacy` 7 of 7 PASS after the full recreate of all containers. `public-url` FAIL with the same redirect loop (`...vm-restart-run10.txt`). |
-| 11 | https | `988982d` | PENDING |
+| 11, 12 | https | `988982d`, `2d21a28` | Cancelled by us: with the redirect block on the container address, the loopback health check saw only redirects and waited 15 minutes. Fixed in `090d600`: the checks use the public HTTPS URL. |
+| 13 | https | `090d600` | FAIL: Docker had created an empty directory where the new `render-redirect.sh` bind mount pointed. Fixed in `d5a6f09`. |
+| 16 | owner | `d2561f1` | PASS: `ravi80847949@gmail.com` had an account with basic permissions; the supported admin API granted admin access, read back as `is_admin: true`. 4 accounts, 2 admins, 0 pending invitations (`...vm-owner-run16.txt`). |
+| 17 | https | `d5a6f09` | HTTPS 200 with the real check, but `http://` answered 200: nginx still ran with its old command. Fixed in `49f3973` (force-recreate nginx). |
+| 18 | owner | `d5a6f09` | PASS: invite-only sign-up on (`invite_only_enabled` false to true), owner already admin (`...vm-owner-run18.txt`). |
+| 19 | https | `49f3973` | PASS: redirect block on `172.18.0.12:80` only; `https://<domain>/api/health` and `/nginx-health` 200 (Let's Encrypt production, `CN=YE1`); `http://<domain>/` 301 (`...vm-https-run19.txt`). |
 
 ### Results on the VM (run 9, commit `6fdf922`)
 
@@ -312,7 +317,7 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | Backup | PASS. 87 s downtime, SHA256SUMS verified by the restore. |
 | Isolated restore | PASS. Port 3100 healthy in about 50 s; `search` 8 of 8 and `privacy` 7 of 7 on the copy; live stack started again afterwards. |
 | Restart | PASS (run 10). `docker compose down` then `up -d`: all containers recreated in about 2 minutes, the 10 named volumes unchanged, indexed documents and access rules intact (`search` 8 of 8, `privacy` 7 of 7). Sessions live in Redis and end with a restart. |
-| Public HTTPS URL | PENDING (run 11, after the redirect fix). |
+| Public HTTPS URL | PASS (run 19). Trusted certificate, 200 over HTTPS, 301 from plain HTTP. The certbot service renews every 12 h; nginx reloads every 6 h. |
 | Chat and citations | BLOCKED: no model provider credentials. |
 | Branding | BLOCKED: no Business license. License enforcement stays on. |
 
@@ -322,8 +327,30 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 0.3 GiB each, MinIO 0.2 GiB, Postgres 0.1 GiB, nginx, Redis and certbot under 10 MiB each.
 Host: 6.5 GiB used of 15.6 GiB, 23 GB disk used of 97 GB. CPU idle below 10 % per container.
 
+### Owner and team (4 October 2026, afternoon)
+
+- Owner `ravi80847949@gmail.com`: admin access granted through `PATCH /api/manage/admin/users/admin-access`
+  (run 16). Password unchanged. The synthetic admin `admin@example.com` of the checks stays as the
+  recoverable administrative account.
+- Invite-only sign-up: on (run 18). It is the Community workspace setting `invite_only_enabled`
+  (`PATCH /api/admin/settings`); existing accounts keep logging in, new sign-ups need an invitation.
+- Invitations: `PUT /api/manage/admin/users` records the invitation and reports
+  `email_invite_status`. With no SMTP settings the status is `NOT_CONFIGURED` or `DISABLED`: no
+  email goes out. The `smtp` action of the workflow writes `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`,
+  `SMTP_PASS`, `SMTP_STARTTLS`, `EMAIL_FROM` and `ENABLE_EMAIL_INVITES=true` into `.env` from the
+  `ci-protected` secrets. BLOCKED until the secrets exist.
+- Enterprise evaluation mode: v4.8.4 treats `LICENSE_ENFORCEMENT_ENABLED=false` with
+  `ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true` as tier ENTERPRISE without a license
+  (`backend/ee/onyx/utils/tier.py:71-100`; upstream uses it in `docker-compose.search-testing.yml`
+  and its CI). The code comments call it a legacy development mode that will go away. It works by
+  switching license enforcement off, which this project keeps on. Not applied. See
+  `docs/product/FEATURE-STATUS.md` for the per-feature status.
+
 ### Remaining inputs
 
-1. Model provider credentials: unblocks `chat`, `chat-forced` and the model answers of
-   `update` and `delete` (`verify-with-chat`).
-2. A Business license: unblocks branding and user groups.
+1. `MODEL_API_KEY` as a `ci-protected` secret: unblocks the `model` action, `chat`, `chat-forced`
+   and the model answers of `update` and `delete` (`verify-with-chat`).
+2. `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM` as `ci-protected` secrets, and
+   one authorized recipient: unblocks invitation emails and their delivery evidence.
+3. A Business license: unblocks native branding, user groups, permission sync, query history and
+   service-account API keys. Not requested in this pass; the web image carries the branding.
