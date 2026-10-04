@@ -1,0 +1,56 @@
+name: Check dev VM SSH
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: check-dev-vm-ssh
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check SSH login
+    if: github.ref == 'refs/heads/main' && github.repository == 'ravi3594444/onyx1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: ci-protected
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check the deployment key
+        env:
+          DEV_SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          DEV_SSH_USER: ${{ secrets.DEV_SSH_USER }}
+          DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+          DEV_SSH_KNOWN_HOSTS: ${{ secrets.DEV_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for name in DEV_SSH_HOST DEV_SSH_USER DEV_SSH_KEY DEV_SSH_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing secret ${name} in ci-protected."
+              exit 1
+            fi
+          done
+          ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+          trap 'rm -rf "${ssh_dir}"' EXIT
+          chmod 700 "${ssh_dir}"
+          umask 077
+          printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+          printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+          login="$(ssh -F /dev/null -i "${ssh_dir}/key" \
+            -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o PreferredAuthentications=publickey \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=2 \
+            -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" whoami)"
+          if [[ "${login}" != "${DEV_SSH_USER}" ]]; then
+            echo "::error::SSH returned a different user."
+            exit 1
+          fi
+          echo "SSH_LOGIN_OK"
+          echo "SSH key login and the VM host key passed. No deployment ran." >>"${GITHUB_STEP_SUMMARY}"
