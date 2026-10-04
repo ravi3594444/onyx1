@@ -14,7 +14,7 @@ if [[ -e "${env_file}" ]]; then
   exit 1
 fi
 
-# shellcheck source=release.env
+# shellcheck source=release.env disable=SC1091
 source "${script_dir}/release.env"
 
 set_env_value() {
