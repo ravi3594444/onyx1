@@ -133,7 +133,9 @@ def ensure_owner_admin(admin: OnyxSession, owner: str, checks: Checks) -> bool:
         return False
     checks.record(f"owner {owner} has an account", True, summary(user))
     if not user.get("is_active", False):
+        # Fail closed: no admin access for a deactivated account.
         checks.record(f"owner {owner} is active", False, summary(user))
+        return False
     if user.get("is_admin"):
         checks.record(f"owner {owner} is admin", True, "already admin")
         return True
