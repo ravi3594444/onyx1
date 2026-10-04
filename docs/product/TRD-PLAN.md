@@ -295,7 +295,7 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | 7 | verify | `67c5e58` | `restore` PASS. All checks FAIL with 403 after login: with `WEB_DOMAIN=https://...` the session cookie is `Secure`, and Python did not send it over `http://localhost`. Fixed in `43859e1`. |
 | 8 | verify | `43859e1` | FAIL before the first check: `https://<domain>/api/health` answered no 200 from the VM (the redirect loop). |
 | 9 | verify | `6fdf922` | All 14 functional steps PASS, including backup and the isolated restore. The new `public-url` step FAIL with the diagnosis: the upstream HTTPS block proxies to `localhost:80` with the domain as Host, and the redirect block answered 301. Fixed in `988982d` (`...vm-verify-run9.txt`). |
-| 10 | restart | `6fdf922` | PENDING |
+| 10 | restart | `6fdf922` | `down`, `up -d`, health, the same 10 volumes, `search` 8 of 8 and `privacy` 7 of 7 PASS after the full recreate of all containers. `public-url` FAIL with the same redirect loop (`...vm-restart-run10.txt`). |
 | 11 | https | `988982d` | PENDING |
 
 ### Results on the VM (run 9, commit `6fdf922`)
@@ -311,7 +311,7 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | Pruning race | Reproduced: a file removed during a running prune stays in search after 60 s and no second prune starts. The supported manual prune (`POST .../cc-pair/<id>/prune`) removes it in about 20 s. 6 of 6 checks PASS. The race itself is Onyx behaviour and stays open; the workaround is in RUNBOOK section 7a. |
 | Backup | PASS. 87 s downtime, SHA256SUMS verified by the restore. |
 | Isolated restore | PASS. Port 3100 healthy in about 50 s; `search` 8 of 8 and `privacy` 7 of 7 on the copy; live stack started again afterwards. |
-| Restart | PENDING (run 10). |
+| Restart | PASS (run 10). `docker compose down` then `up -d`: all containers recreated in about 2 minutes, the 10 named volumes unchanged, indexed documents and access rules intact (`search` 8 of 8, `privacy` 7 of 7). Sessions live in Redis and end with a restart. |
 | Public HTTPS URL | PENDING (run 11, after the redirect fix). |
 | Chat and citations | BLOCKED: no model provider credentials. |
 | Branding | BLOCKED: no Business license. License enforcement stays on. |
