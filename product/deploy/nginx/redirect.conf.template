@@ -1,11 +1,12 @@
 # Added by enable-https.sh next to the upstream template (RUNBOOK.md, section 3a).
-# nginx prefers the server block whose server_name matches the Host header over the
-# upstream default_server block. So requests for the domain on port 80 get this block:
-# the ACME challenge path stays reachable for certificate renewal, and everything else
-# redirects to HTTPS. Requests to 127.0.0.1 (the compose health check) still reach the
-# upstream block.
+# enable-https.sh fills in ${DOMAIN}. The nginx command in compose.https.yml fills in
+# ${LISTEN_ADDR} with the container's own address at every start.
+# The block listens on that address only. Requests from the internet arrive there, so
+# they get the ACME challenge path or a redirect to HTTPS. The upstream HTTPS block proxies
+# every request to localhost:80 with the same Host header; those requests arrive on
+# 127.0.0.1, which only the upstream port-80 block listens on, so they reach the app.
 server {
-    listen 80;
+    listen ${LISTEN_ADDR}:80;
     server_name ${DOMAIN};
 
     location /.well-known/acme-challenge/ {

@@ -96,10 +96,12 @@ for name in options-ssl-nginx.conf ssl-dhparams.pem; do
     install -m 644 "${script_dir}/tls/${name}" "${certbot_dir}/conf/${name}"
 done
 pass "options-ssl-nginx.conf and ssl-dhparams.pem are in ${certbot_dir}/conf."
-# Port 80 answers the ACME challenge and redirects everything else to HTTPS.
-sed "s/\${DOMAIN}/${domain}/g" "${script_dir}/nginx/redirect.conf.template" >"${redirect_dir}/redirect.conf.tmp"
-mv "${redirect_dir}/redirect.conf.tmp" "${redirect_dir}/redirect.conf"
-pass "redirect block for ${domain} is in ${redirect_dir}/redirect.conf."
+# Port 80 on the container address answers the ACME challenge and redirects everything else
+# to HTTPS. The nginx command fills in the address at start (compose.https.yml).
+sed "s/\${DOMAIN}/${domain}/g" "${script_dir}/nginx/redirect.conf.template" >"${redirect_dir}/redirect.conf.template.tmp"
+mv "${redirect_dir}/redirect.conf.template.tmp" "${redirect_dir}/redirect.conf.template"
+rm -f "${redirect_dir}/redirect.conf"
+pass "redirect block for ${domain} is in ${redirect_dir}/redirect.conf.template."
 
 live="/etc/letsencrypt/live/${domain}"
 if in_certbot "test -s '${live}/fullchain.pem'" >/dev/null 2>&1; then
@@ -149,15 +151,18 @@ else
 fi
 
 # --- 6. Verify ---------------------------------------------------------------------------------
-curl_tls=(curl -fsS --max-time 20 -o /dev/null)
+curl_tls=(curl -s --max-time 20 -o /dev/null -w '%{http_code}')
 [[ "${STAGING:-0}" == 1 ]] && curl_tls+=(--insecure)
-# nginx loads a new certificate after a reload; give its workers a few seconds.
+# Passes only on HTTP 200: curl -f accepts a redirect, and a redirect loop looked like a pass
+# before. nginx loads a new certificate after a reload; give its workers a few seconds.
 https_ok() {
-  local tries
+  local tries code
   for tries in 1 2 3 4 5 6; do
-    "${curl_tls[@]}" "$1" && return 0
+    code="$("${curl_tls[@]}" "$1" || true)"
+    [[ "${code}" == 200 ]] && return 0
     ((tries < 6)) && sleep 5
   done
+  echo "last answer of $1: HTTP ${code:-none}" >&2
   return 1
 }
 for path in /nginx-health /api/health; do
