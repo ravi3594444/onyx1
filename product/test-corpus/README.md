@@ -32,3 +32,32 @@ A fluent answer without the expected citation does not pass.
 | --- | --- | --- |
 | U1 | In `whatsapp-assistant-product-guide.md`, set the support hours to "Monday to Friday, 10:00 to 18:00 IST" and the guide version to 2.4. | Q2 returns the new hours. |
 | D1 | Remove `refund-policy-2025.md` from the source. | No search result shows the 2025 edition. Q3 cites only the 2026 edition. |
+
+## Pass and fail
+
+`run_checks.py` compares each result with the expected evidence above.
+
+- Each check prints one line on stdout: `PASS <check>: <detail>` or `FAIL <check>: <detail>`. The detail is JSON.
+- A step runs all its checks, also after a check fails. Then it prints `PASS step <step>` or `FAIL step <step>`.
+- A step exits with 0 only when all its checks pass. Otherwise it exits with 1.
+- Some errors stop the step: a login or API call fails, a search returns an error, or the state file lacks an ID from an earlier step. The step then prints `FAIL <step> runs to the end: <reason>` and `FAIL step <step>`, and exits with 1.
+- A wait that is longer than 900 seconds fails its check.
+- After each login, the script reads `/api/me`. If the session is not the expected user, the step stops.
+- A check that expects no result also needs a control result. An empty or failed search does not pass. Examples: the search for `KESTREL-7731` must return public documents, the deletion search must show `refund-policy-2026.md`, and user B must get access to the IDs that user A must not get.
+- A chat check fails when the stream reports an error, also when a tool fails and the model still answers.
+- Title and citation checks compare file names exactly. Fact checks ignore case and extra spaces, and read `38-46` as `38 to 46`.
+- Q4 passes only with an answer that cites no document. Read the answer to make sure that it does not invent a policy.
+- The `delete` step finds `refund-policy-2025.md` before it removes the file. Thus, run it only once after each `index` step.
+
+Run the steps in this order. The command stops at the first failed step and exits with its code:
+
+```bash
+(
+  set -e
+  for step in index search chat chat-forced privacy update delete; do
+    python3 product/test-corpus/run_checks.py --base-url http://localhost:3000 "$step"
+  done
+)
+```
+
+To keep a log, add `2>&1 | tee checks.log` after the closing parenthesis, and run `set -o pipefail` first.
