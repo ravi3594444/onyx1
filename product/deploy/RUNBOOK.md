@@ -100,15 +100,18 @@ The script does these steps and prints a `PASS` or `FAIL` line for each check:
    It changes no other value.
 3. Copies `options-ssl-nginx.conf` and `ssl-dhparams.pem` from `product/deploy/tls/` (pinned
    copies from certbot v5.8.0, checked against `SHA256SUMS`) into `../data/certbot/conf`. It
-   renders `product/deploy/nginx/redirect.conf.template` into `../data/nginx-extra/`, which the
-   overlay mounts into nginx. If no certificate exists, it writes a 1-day dummy certificate
-   (`CN=localhost`), so that nginx can start.
+   copies `product/deploy/nginx/redirect.conf.template` with the domain filled in into
+   `../data/nginx-extra/`, which the overlay mounts into nginx. The nginx command fills in the
+   container address at every start: the redirect block listens on that address only. The
+   upstream HTTPS block proxies every request to `localhost:80` with the same Host header, and
+   those requests must reach the upstream port-80 block, not the redirect. If no certificate
+   exists, it writes a 1-day dummy certificate (`CN=localhost`), so that nginx can start.
 4. Runs `docker compose up -d`. This recreates nginx with the production template and starts
    `certbot`. Then it waits for `http://localhost/nginx-health`.
 5. If the certificate is the dummy, it removes it and runs `certbot certonly --webroot`. Then
    it reloads nginx.
-6. Checks `https://<domain>/nginx-health` and `https://<domain>/api/health`, and that
-   `http://<domain>/` answers a 301 to HTTPS. The redirect block serves only the ACME challenge
+6. Checks that `https://<domain>/nginx-health` and `https://<domain>/api/health` answer 200
+   (a redirect does not pass), and that `http://<domain>/` answers a 301 to HTTPS. The redirect block serves only the ACME challenge
    path and the health check on port 80 for the domain. `WEB_DOMAIN` makes the app build its
    own links with `https://`. An HSTS header needs a change to the upstream 443 server block,
    so it is not set.

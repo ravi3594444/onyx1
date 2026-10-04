@@ -16,12 +16,16 @@ services:
     volumes:
       - ../data/certbot/conf:/etc/letsencrypt
       - ../data/certbot/www:/var/www/certbot
-      # Rendered by enable-https.sh from product/deploy/nginx/redirect.conf.template.
-      - ../data/nginx-extra/redirect.conf:/etc/nginx/conf.d/zz-redirect.conf:ro
-    # Same command as upstream, with the production template.
+      # Copied by enable-https.sh from product/deploy/nginx/redirect.conf.template, with the
+      # domain filled in. The command below fills in the container address at every start.
+      - ../data/nginx-extra/redirect.conf.template:/etc/nginx/conf.d/zz-redirect.conf.template:ro
+    # Same command as upstream, with the production template, plus the redirect block.
+    # The redirect block binds the container address only (see redirect.conf.template).
     command: >
       /bin/sh -c "rm -f /etc/nginx/conf.d/default.conf
       && cp -a /nginx-templates/. /etc/nginx/conf.d/
+      && LISTEN_ADDR=$$(hostname -i | cut -d' ' -f1) envsubst '$$LISTEN_ADDR'
+      < /etc/nginx/conf.d/zz-redirect.conf.template > /etc/nginx/conf.d/zz-redirect.conf
       && sed 's/\r$//' /etc/nginx/conf.d/run-nginx.sh > /tmp/run-nginx.sh
       && chmod +x /tmp/run-nginx.sh
       && /tmp/run-nginx.sh app.conf.template.prod"
