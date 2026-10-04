@@ -1,7 +1,9 @@
 name: Bootstrap dev VM
 # Runs product/deploy/vm-bootstrap.sh on the development VM over SSH.
 # inspect: read-only report. install: Docker, host settings, release files, stack start.
-# verify: functional checks, backup, isolated restore. See product/deploy/RUNBOOK.md.
+# verify: functional checks, backup, isolated restore. restart: down and up, then search
+# and privacy checks. https, https-staging: Let's Encrypt for my-knowledge.duckdns.org.
+# See product/deploy/RUNBOOK.md.
 
 on:
   workflow_dispatch:
@@ -16,10 +18,17 @@ on:
           - install
           - verify
           - verify-with-chat
+          - restart
+          - https
+          - https-staging
       web_domain:
         description: Public URL of the stack (install only, for a new .env)
         type: string
         default: http://my-knowledge.duckdns.org
+      letsencrypt_email:
+        description: Email for the Let's Encrypt account (https and https-staging only)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -46,6 +55,7 @@ jobs:
     env:
       BOOTSTRAP_ACTION: ${{ inputs.action }}
       WEB_DOMAIN: ${{ inputs.web_domain }}
+      LETSENCRYPT_EMAIL: ${{ inputs.letsencrypt_email }}
     steps:
       - name: Check the deploy secrets
         env:
@@ -77,6 +87,16 @@ jobs:
             install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
             verify) args="verify ${GITHUB_SHA}" ;;
             verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+            restart) args="restart ${GITHUB_SHA}" ;;
+            https | https-staging)
+              # The value goes into the remote command line, so allow only a plain address.
+              if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+                echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+                exit 1
+              fi
+              args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+              [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+              ;;
             *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
           esac
           if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then

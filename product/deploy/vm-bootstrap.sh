@@ -3,6 +3,8 @@
 # Usage: vm-bootstrap.sh inspect
 #        vm-bootstrap.sh install <full commit SHA> <web domain>
 #        vm-bootstrap.sh verify <full commit SHA> [with-chat]
+#        vm-bootstrap.sh restart <full commit SHA>
+#        vm-bootstrap.sh https <full commit SHA> <email> [staging]
 # Layout on the VM: /srv/onyx-src (clone of the fork), /srv/onyx (release files, .env,
 # evidence), /srv/backups. See product/deploy/RUNBOOK.md.
 # The script never creates a second .env, never removes the live volumes and never
@@ -50,7 +52,9 @@ main() {
     inspect) inspect ;;
     install) install_stack "$@" ;;
     verify) verify_wrapper "$@" ;;
-    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat]" ;;
+    restart) restart_wrapper "$@" ;;
+    https) enable_https "$@" ;;
+    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging]" ;;
   esac
 }
 
@@ -269,7 +273,8 @@ configure_host() {
   echo "vm.max_map_count=262144" | sudo -n tee /etc/sysctl.d/99-onyx.conf >/dev/null
   sudo -n sysctl --system >/dev/null
   sysctl vm.max_map_count
-  sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${ONYX_SRC_DIR}" "${ONYX_DEPLOY_DIR}" "${BACKUP_ROOT}"
+  sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${ONYX_SRC_DIR}" "${ONYX_DEPLOY_DIR}" "${BACKUP_ROOT}" \
+    "${ONYX_RESTORE_DIR}"
   command -v git >/dev/null || sudo -n -E apt-get -y install git
 }
 
@@ -625,15 +630,103 @@ start_live() {
 # Restores the backup into a fresh folder on ports 3100 and 8100 while the live stack is stopped.
 isolated_restore() {
   local sha="$1" backup_dir="$2"
-  rm -rf "${ONYX_RESTORE_DIR}"
-  mkdir -p "${RESTORE_COMPOSE_DIR}"
+  # Only root can write /srv, so the folder itself stays and only its content goes.
+  if [[ ! -d "${ONYX_RESTORE_DIR}" ]]; then
+    sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${ONYX_RESTORE_DIR}" || return 1
+  fi
+  find "${ONYX_RESTORE_DIR}" -mindepth 1 -delete || return 1
+  mkdir -p "${RESTORE_COMPOSE_DIR}" || return 1
   export_release_files "${RESTORE_COMPOSE_DIR}" "${sha}" || return 1
+  # export_release_files runs without errexit here. Check its result before the live stack stops.
+  [[ -f "${RESTORE_COMPOSE_DIR}/docker-compose.yml" && -f "${RESTORE_COMPOSE_DIR}/compose.override.yml" ]] || {
+    echo "ERROR: the release files are missing in ${RESTORE_COMPOSE_DIR}. The live stack keeps running." >&2
+    return 1
+  }
   echo "stopping the live stack"
   live_compose stop || return 1
   LIVE_STOPPED=1
   # restore.sh copies env.backup to .env. See restore_compose for COMPOSE_FILE.
   COMPOSE_FILE=docker-compose.yml:compose.override.yml HOST_PORT=3100 HOST_PORT_80=8100 \
     "${ONYX_SRC_DIR}/product/deploy/restore.sh" "${backup_dir}" "${RESTORE_COMPOSE_DIR}" "${RESTORE_PROJECT}"
+}
+
+
+# ---------------------------------------------------------------- restart
+
+restart_wrapper() {
+  local sha="${1:-}" evidence code=0
+  check_sha "${sha}"
+  evidence="${EVIDENCE_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)-restart"
+  mkdir -p "${evidence}"
+  echo "Evidence folder: ${evidence}"
+  restart_stack "${sha}" "${evidence}" 2>&1 | tee "${evidence}/restart.log" || code=$?
+  return "${code}"
+}
+
+# Recreates all live containers (down, then up -d) and checks that the indexed data and
+# the access rules are still there. "down" never gets -v, so the named volumes stay.
+restart_stack() {
+  local sha="$1" evidence="$2" state volumes_before volumes_after work_dir
+  section "vm-bootstrap restart ${sha} $(date -u +%FT%TZ)"
+  docker info >/dev/null 2>&1 || die "docker does not work without sudo. Run the install action first."
+  docker_setup
+  [[ -f "${COMPOSE_DIR}/.env" ]] || die "${COMPOSE_DIR}/.env is missing. Run the install action first."
+  [[ -f "${USERS_FILE}" ]] || die "${USERS_FILE} is missing. Run the verify action first."
+  state="$(find "${EVIDENCE_ROOT}" -mindepth 2 -maxdepth 2 -name state.json | sort | tail -n 1)"
+  [[ -n "${state}" ]] || die "No state.json in ${EVIDENCE_ROOT}. Run the verify action first."
+  echo "State of the last verify: ${state}"
+  cp "${state}" "${evidence}/state.json"
+  set_live_url
+  wait_health "${LIVE_URL}" 60 || die "The live stack is not healthy before the restart."
+  checkout_source "${sha}"
+  work_dir="$(mktemp -d)"
+  export TMPDIR="${work_dir}"
+  # shellcheck disable=SC1090
+  source "${USERS_FILE}"
+  export ADMIN_EMAIL ADMIN_PASSWORD USER_A_EMAIL USER_A_PASSWORD USER_B_EMAIL USER_B_PASSWORD
+
+  volumes_before="$(dk volume ls -q --filter label=com.docker.compose.project=onyx | sort)"
+  show "containers before" live_compose ps --format '{{.Name}} {{.ID}} {{.Status}}'
+  run_step down live_compose down
+  run_step up live_compose up -d
+  run_step health wait_health "${LIVE_URL}"
+  show "containers after" live_compose ps --format '{{.Name}} {{.ID}} {{.Status}}'
+  volumes_after="$(dk volume ls -q --filter label=com.docker.compose.project=onyx | sort)"
+  echo "volumes: ${volumes_after//$'\n'/ }"
+  run_step volumes-kept test -n "${volumes_after}" -a "${volumes_before}" = "${volumes_after}"
+
+  local checks="${ONYX_SRC_DIR}/product/test-corpus/run_checks.py" step
+  for step in search privacy; do
+    run_step "${step}" python3 "${checks}" --base-url "${LIVE_URL}" --state "${evidence}/state.json" \
+      --skip-chat "${step}"
+  done
+  show "docker stats" dk stats --no-stream
+  show "memory" free -m
+  summary
+}
+
+# ---------------------------------------------------------------- https
+
+# Runs enable-https.sh for DNS_NAME. "staging" requests an untrusted test certificate.
+enable_https() {
+  local sha="${1:-}" email="${2:-}" mode="${3:-}"
+  check_sha "${sha}"
+  [[ "${email}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || die "Give a valid email for Let's Encrypt."
+  [[ -z "${mode}" || "${mode}" == staging ]] || die "The third argument must be staging or empty."
+  section "vm-bootstrap https ${DNS_NAME} ${sha} $(date -u +%FT%TZ) (mode=${mode:-production})"
+  docker info >/dev/null 2>&1 || die "docker does not work without sudo. Run the install action first."
+  docker_setup
+  [[ -f "${COMPOSE_DIR}/.env" ]] || die "${COMPOSE_DIR}/.env is missing. Run the install action first."
+  checkout_source "${sha}"
+  if [[ "${mode}" == staging ]]; then
+    STAGING=1 "${ONYX_SRC_DIR}/product/deploy/enable-https.sh" "${COMPOSE_DIR}" "${DNS_NAME}" "${email}"
+  else
+    "${ONYX_SRC_DIR}/product/deploy/enable-https.sh" "${COMPOSE_DIR}" "${DNS_NAME}" "${email}"
+  fi
+  set_live_url
+  wait_health "${LIVE_URL}"
+  show "docker compose ps" live_compose ps
+  section "https complete: https://${DNS_NAME}"
 }
 
 main "$@"
