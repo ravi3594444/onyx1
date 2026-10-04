@@ -325,6 +325,9 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | 46 | saas-journey | `2581f67` | PASS, 52 of 52, without any model or prompt setup by the test: two companies by ordinary sign-up, the platform model as default, immediate chat, key masked and not movable to another API base (HTTP 400), uploads and indexing, invitations, member rights, Q1–Q5 grounded answers with the unchanged assertions, isolation of users, search, chat, files, connectors and assistants; the key in none of 158 responses (`...vm-saas-journey-run46.txt`). |
 | 47 | saas-restart | `2581f67` | PASS: `down`, `up -d`, health, public URL, the same volumes, then 19 of 19 after-restart checks (`...vm-saas-restart-run47.txt`). |
 | UI 1 | axi-ui-evidence (saas) | `2581f67` | PASS, all browser checks: branded login, sign-up and phone layout, company A sign-up, account menu, admin users, invitation, LLM page, chat answered "OK" with the platform model, company B isolation, invited member joins and has no admin panel. Found the "existing team" error dialog after sign-up; fixed in `2d74a09`. |
+| 48 | saas-update | `2d74a09`+pin | PASS: web `v4.8.4-axi-cloud.5` deployed; backfill `kept` for all 6 companies, so native setup had already given every company the model and the instructions (`...vm-saas-update-run48.txt`). |
+| UI 2 | axi-ui-evidence (saas) | final images | PASS, all browser checks, no dialog after sign-up. Screenshots: `product/test-corpus/evidence/ui-2026-10-04-saas/`. |
+| 49 | saas-journey | final images | PASS, 52 of 52 (`...vm-saas-journey-run49.txt`). |
 
 ### Results on the VM (run 9, commit `6fdf922`)
 
