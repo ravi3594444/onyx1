@@ -14,7 +14,8 @@ Test results: the "Baseline evidence" section of `docs/product/TRD-PLAN.md`.
 | Compose files | `deployment/docker_compose` and `deployment/data` from the tag `v4.8.4`. Do not use the files on fork `main`; they belong to a later, unreleased version. |
 | Edition | Enterprise code loads (upstream default `LICENSE_ENFORCEMENT_ENABLED=true`). Without a license the tier is `community`. |
 
-The fork keeps upstream source unchanged. Our additions live in `docs/product/` and `product/`.
+The fork keeps upstream source unchanged. Our additions live in `docs/product/`, `product/`
+and `.github/workflows/axi-*.yml`.
 
 ## 2. Remotes
 
@@ -124,6 +125,14 @@ It saves the volumes `db_volume` (Postgres), `opensearch-data`, `minio_data` (or
 and `file-system`, plus `.env` and a `SHA256SUMS` file. Model caches, logs and Redis are not
 durable state.
 
+Safety rules in `backup.sh`:
+
+- The backup folder must be new. All files are readable only by the owner.
+- If a step fails or a signal stops the script, the script starts the stack again and removes
+  the partial copy. Only a complete copy gets the final folder name.
+- If something starts the stack during the copy, the backup fails.
+- The exit code is 0 only when the copy is complete and the stack is running again.
+
 Isolated restore test, on a second VM or with the live stack stopped:
 
 ```bash
@@ -132,6 +141,17 @@ cp product/deploy/compose.override.yml /srv/onyx-restore/deployment/docker_compo
 HOST_PORT=3100 HOST_PORT_80=8100 product/deploy/restore.sh \
   /srv/backups/2026-10-04 /srv/onyx-restore/deployment/docker_compose onyx-restore
 ```
+
+Safety rules in `restore.sh`:
+
+- It checks `SHA256SUMS` and requires every archive and `env.backup`.
+- It stops before any change if the target project has containers or volumes. It never
+  deletes data.
+- An existing `.env` must be identical to `env.backup`. The six required secrets must be set.
+- It starts only nginx and the services nginx needs. It does not start `background`, so the
+  copy does not sync connectors or run bots with live credentials.
+- It waits for `/api/health` (`RESTORE_HEALTH_TIMEOUT`, default 900 s). A healthy API shows
+  that the restored database and OpenSearch passwords work.
 
 Restore only into the same release. A newer image migrates the database and the index;
 after that, rollback needs a backup from before the upgrade.
@@ -142,12 +162,18 @@ Do not activate real outbound connectors in a restored test copy.
 ```bash
 export ADMIN_EMAIL=... ADMIN_PASSWORD=... USER_A_EMAIL=... USER_A_PASSWORD=... \
        USER_B_EMAIL=... USER_B_PASSWORD=...
-for step in index search chat privacy update delete; do
-  python3 product/test-corpus/run_checks.py --base-url http://localhost:3000 "$step"
-done
+set -o pipefail
+(
+  set -e
+  for step in index search chat chat-forced privacy update delete; do
+    python3 product/test-corpus/run_checks.py --base-url http://localhost:3000 "$step"
+  done
+) 2>&1 | tee checks.log
 ```
 
-Compare the output with `product/test-corpus/README.md`.
+Each step prints `PASS` and `FAIL` lines and exits with 1 when a check fails. The loop stops
+at the first failed step. Without a model provider, add `--skip-chat` and leave out the
+`chat` and `chat-forced` steps. See `product/test-corpus/README.md`.
 
 ## 10. Custom-change register
 
@@ -159,25 +185,76 @@ Compare the output with `product/test-corpus/README.md`.
 | Backup and restore | `product/deploy/backup.sh`, `restore.sh` | Recovery path | Isolated restore test |
 | Brand assets and apply script | `product/branding/` | Supported white-label settings | Returns 402 until licensed |
 | Test corpus and checks | `product/test-corpus/` | PRD functional checks | Sandbox run |
+| CI/CD workflows and deploy script | `.github/workflows/axi-*.yml`, `product/deploy/deploy-remote.sh` | CI checks and dev deploy | `actionlint`, `zizmor`, `shellcheck`; GitHub Actions run |
 
 There are no changes to upstream source files.
 
 ## 11. CI and deployment pipeline
 
-Review result (4 October 2026):
+We added two workflows. The 50 upstream workflows stay unchanged.
 
-- The fork has 50 workflows from upstream. GitHub Actions is not enabled on the fork, so none
-  of them runs (0 registered workflows, 0 runs).
-- Many of them need Onyx's private secrets (Docker Hub, AWS, Slack, Sentry) or self-hosted
-  `runs-on` runners. Some publish images and releases.
-- We added no workflow. Our files are checked locally by the repository's pre-commit hooks
-  (`ruff`, `shellcheck`, `ripsecrets`, large-file check):
+| Workflow | Trigger | What it does |
+| --- | --- | --- |
+| `axi-product-ci.yml` ("22nd X AI product checks") | Pull requests, and pushes to `main` and `claude/**`, that change `product/`, `docs/product/` or `axi-*.yml`; manual run | `static`: pre-commit hooks on our files (large files, YAML, `ripsecrets`, `shellcheck`, `ruff`, `ruff-format`, `actionlint`, `zizmor`), `py_compile`, `bash -n`. `compose-config`: exports the tag from `release.env`, checks its commit, runs `make-env.sh`, checks the services and the image digests. `e2e` (push to `main` or manual run): starts the stack, registers 3 users, runs the `index` and `search` checks, backs up, restores into `onyx-restore` on port 3100 and searches there. |
+| `axi-deploy-dev.yml` ("Deploy 22nd X AI dev") | The product checks pass on a push to `main`; manual run from `main` | A manual run first checks that the product checks passed on `main` for that commit. Then it runs `product/deploy/deploy-remote.sh` on the VM over SSH. One deploy at a time. |
 
-  ```bash
-  uvx pre-commit run --files $(git ls-files docs/product product)
-  ```
+CI has no model provider. Thus `e2e` does not run `chat`, `privacy`, `update` and `delete`,
+because these steps use the chat API. Run them on the VM as section 9 shows.
+To run the static checks locally: `uvx pre-commit run --files $(git ls-files docs/product product)`.
 
-Before you enable Actions, disable the upstream workflows you do not want
-(`gh workflow disable <name>`), because enabling Actions activates all of them.
-Add a deployment workflow only when the VM, its secrets and the license exist. It must deploy
-the pinned digests in `release.env`, keep the volumes, and check `/api/health` after the deploy.
+Deploy secrets. The SSH key gives `docker` access, which is equal to root on the VM.
+Thus keep the secrets only in the environment `development`, never in the repository:
+
+1. Create the environment `development` (**Settings > Environments**) before you add secrets.
+2. Set **Deployment branches and tags** to **Selected branches** with the rule `main`.
+   Then a workflow on another branch cannot read the secrets. A required reviewer is optional.
+3. Add the 4 secrets to this environment:
+
+| Secret | Value |
+| --- | --- |
+| `DEV_SSH_HOST` | VM host name or IP address |
+| `DEV_SSH_USER` | Deploy user. It must be able to run `docker`. |
+| `DEV_SSH_KEY` | Private SSH key of the deploy user, without a passphrase |
+| `DEV_SSH_KNOWN_HOSTS` | `known_hosts` line of the VM. Compare `ssh-keyscan <host>` with the fingerprint on the VM. |
+
+If a secret is missing, the deploy job writes a notice and stops without an error.
+
+`deploy-remote.sh` assumes this layout on the VM:
+
+- `/srv/onyx-src`: a clone of the fork. Its `origin` remote must fetch without a prompt.
+- `/srv/onyx`: the release files and the `.env` from section 3.
+
+The script fetches the deployed commit. It prepares the tag files, `compose.override.yml`
+and a copy of `.env` with `IMAGE_TAG` and `ONYX_*_IMAGE` from `release.env` in a temporary
+folder, and runs `docker compose pull` there. Only after a good pull does it check out the
+commit, copy the files to `/srv/onyx` and run `docker compose up -d`. Then it waits up to
+15 minutes for `/api/health`. Compose output goes to `/srv/onyx/deploy.log`. The script never
+creates `.env` and never removes volumes. If `.env` is missing, it stops: run `make-env.sh` once.
+
+The script stops in two more cases:
+
+- The commit does not include the deployed commit (the `HEAD` of `/srv/onyx-src`), for example
+  a re-run of an old run. To deploy an older commit on purpose, run on the VM:
+  `ALLOW_ROLLBACK=1 bash -s -- <sha> </srv/onyx-src/product/deploy/deploy-remote.sh`.
+- `release.env` names a different Onyx release than `.env`. The new release migrates the
+  database, and only a backup from before the upgrade can undo that. Run `backup.sh` on the VM,
+  then start a manual deploy with **allow_release_change** selected.
+
+To start the pipeline:
+
+1. Merge the workflows to `main`. GitHub shows the manual run button and starts the deploy
+   trigger only for workflow files on the default branch.
+2. The owner enables Actions in the fork's **Actions** tab. This also enables all upstream
+   workflows. Many of them need Onyx's private secrets or self-hosted runners, and some
+   publish images and releases.
+3. Disable the upstream workflows at once:
+
+   ```bash
+   for file in $(git ls-files '.github/workflows/*.yml' | grep -v '/axi-'); do
+     gh workflow disable "$(basename "${file}")" --repo ravi3594444/onyx1
+   done
+   gh workflow list --all --repo ravi3594444/onyx1
+   ```
+
+4. When the VM exists, create the environment `development` and add the deploy secrets as
+   shown above.

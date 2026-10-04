@@ -1,0 +1,112 @@
+name: Deploy 22nd X AI dev
+# Deploys main to the development VM after the product checks pass on main.
+# See product/deploy/RUNBOOK.md, section 11.
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow_release_change:
+        description: Permit a new Onyx release. Run backup.sh on the VM first.
+        type: boolean
+        default: false
+  # Safe: the job runs only for a successful push run on main of this repository.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: ["22nd X AI product checks"]
+    types: [completed]
+    branches: [main]
+
+# One deploy at a time. A queued deploy waits and is not cancelled.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    name: Deploy to the development VM
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    # Image pull, then up to 15 minutes for the health check.
+    timeout-minutes: 60
+    environment: development
+    permissions:
+      contents: read
+      # Reads the product check runs for a manual deploy.
+      actions: read
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      ALLOW_RELEASE_CHANGE: ${{ inputs.allow_release_change && '1' || '0' }}
+    steps:
+      - name: Check the deploy secrets
+        id: secrets
+        env:
+          DEV_SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          DEV_SSH_USER: ${{ secrets.DEV_SSH_USER }}
+          DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+          DEV_SSH_KNOWN_HOSTS: ${{ secrets.DEV_SSH_KNOWN_HOSTS }}
+        run: |
+          missing=()
+          for name in DEV_SSH_HOST DEV_SSH_USER DEV_SSH_KEY DEV_SSH_KNOWN_HOSTS; do
+            [[ -n "${!name}" ]] || missing+=("${name}")
+          done
+          if ((${#missing[@]})); then
+            echo "::notice::Deploy skipped. Missing secrets: ${missing[*]}."
+            echo "Deploy skipped. Missing secrets: ${missing[*]}. See RUNBOOK.md, section 11." >>"${GITHUB_STEP_SUMMARY}"
+            echo "ready=false" >>"${GITHUB_OUTPUT}"
+          else
+            echo "ready=true" >>"${GITHUB_OUTPUT}"
+          fi
+      - name: Check that the product checks passed for this commit
+        if: steps.secrets.outputs.ready == 'true' && github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow axi-product-ci.yml \
+            --branch main --commit "${DEPLOY_SHA}" --status success --json databaseId --jq length)"
+          if ((passed == 0)); then
+            echo "::error::The product checks did not pass on main for ${DEPLOY_SHA}. Run them on main first."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v6
+        if: steps.secrets.outputs.ready == 'true'
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          persist-credentials: false
+      - name: Deploy over SSH
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          DEV_SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          DEV_SSH_USER: ${{ secrets.DEV_SSH_USER }}
+          DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+          DEV_SSH_KNOWN_HOSTS: ${{ secrets.DEV_SSH_KNOWN_HOSTS }}
+        run: |
+          if [[ ! "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ || ! "${ALLOW_RELEASE_CHANGE}" =~ ^[01]$ ]]; then
+            echo "::error::DEPLOY_SHA or ALLOW_RELEASE_CHANGE is not valid."
+            exit 1
+          fi
+          ssh_dir="${RUNNER_TEMP}/ssh"
+          install -d -m 700 "${ssh_dir}"
+          install -m 600 /dev/null "${ssh_dir}/key"
+          printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+          printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+          ssh -i "${ssh_dir}/key" -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+            -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+            -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+            "ALLOW_RELEASE_CHANGE=${ALLOW_RELEASE_CHANGE} bash -s -- ${DEPLOY_SHA}" \
+            <product/deploy/deploy-remote.sh
+          echo "Deployed ${DEPLOY_SHA} to the development VM." >>"${GITHUB_STEP_SUMMARY}"
+      - name: Remove the SSH key
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/ssh"

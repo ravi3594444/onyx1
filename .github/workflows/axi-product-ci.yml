@@ -1,0 +1,223 @@
+name: 22nd X AI product checks
+# Checks our files in product/ and docs/product/. See product/deploy/RUNBOOK.md, section 11.
+
+on:
+  pull_request:
+    paths:
+      - "product/**"
+      - "docs/product/**"
+      - ".github/workflows/axi-*.yml"
+  push:
+    branches:
+      - main
+      - "claude/**"
+    paths:
+      - "product/**"
+      - "docs/product/**"
+      - ".github/workflows/axi-*.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # ratchet:actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # ratchet:astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.11.25"
+          enable-cache: false
+      - name: Run pre-commit hooks on our files
+        env:
+          # Lets zizmor run its online audits. The job can only read.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t files < <(git ls-files product docs/product '.github/workflows/axi-*.yml')
+          # The hook checks only staged files, so a clean checkout needs --enforce-all.
+          uvx --from pre-commit-hooks==6.0.0 check-added-large-files --enforce-all --maxkb=1500 "${files[@]}"
+          for hook in check-yaml ripsecrets shellcheck ruff ruff-format actionlint zizmor; do
+            uvx --from pre-commit==4.6.2 pre-commit run "${hook}" --show-diff-on-failure --files "${files[@]}"
+          done
+      - name: Compile Python and parse shell scripts
+        run: |
+          python3 -m py_compile product/test-corpus/run_checks.py
+          while IFS= read -r -d '' script; do
+            bash -n "${script}"
+          done < <(git ls-files -z 'product/*.sh')
+
+  compose-config:
+    name: Compose config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Export the pinned release files
+        run: |
+          source product/deploy/release.env
+          git fetch --quiet --no-tags --depth 1 https://github.com/onyx-dot-app/onyx \
+            "refs/tags/${ONYX_RELEASE_TAG}:refs/tags/${ONYX_RELEASE_TAG}"
+          actual="$(git rev-parse "refs/tags/${ONYX_RELEASE_TAG}^{commit}")"
+          if [[ "${actual}" != "${ONYX_RELEASE_COMMIT}" ]]; then
+            echo "::error::Tag ${ONYX_RELEASE_TAG} is ${actual}, not ${ONYX_RELEASE_COMMIT}."
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/onyx"
+          git archive "${ONYX_RELEASE_TAG}" deployment/docker_compose deployment/data |
+            tar -x -C "${RUNNER_TEMP}/onyx"
+          cp product/deploy/compose.override.yml "${RUNNER_TEMP}/onyx/deployment/docker_compose/"
+          product/deploy/make-env.sh "${RUNNER_TEMP}/onyx/deployment/docker_compose"
+      - name: Check the rendered configuration
+        run: |
+          # Not exported, so Compose reads the image pins from .env only.
+          source product/deploy/release.env
+          cd "${RUNNER_TEMP}/onyx/deployment/docker_compose"
+          docker compose config --quiet
+          services="$(docker compose config --services)"
+          echo "${services}"
+          if grep -qx code-interpreter <<<"${services}"; then
+            echo "::error::code-interpreter must be opt-in."
+            exit 1
+          fi
+          for service in api_server opensearch minio; do
+            if ! grep -qx "${service}" <<<"${services}"; then
+              echo "::error::Service ${service} is missing."
+              exit 1
+            fi
+          done
+          images="$(docker compose config --images | sort -u)"
+          echo "${images}"
+          onyx_images="$(grep -E '^(docker\.io/)?onyxdotapp/onyx-' <<<"${images}" || true)"
+          expected="$(printf '%s\n' "${ONYX_BACKEND_IMAGE}" "${ONYX_WEB_SERVER_IMAGE}" "${ONYX_MODEL_SERVER_IMAGE}" | sort -u)"
+          if [[ "${onyx_images}" != "${expected}" ]]; then
+            echo "::error::The Onyx images are not the digests in release.env."
+            exit 1
+          fi
+
+  e2e:
+    name: End-to-end
+    needs: [static, compose-config]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Free disk space and set host limits
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker image prune --all --force
+          # OpenSearch needs this setting.
+          sudo sysctl -w vm.max_map_count=262144
+          df -h /
+      - name: Export the pinned release files
+        run: |
+          source product/deploy/release.env
+          git fetch --quiet --no-tags --depth 1 https://github.com/onyx-dot-app/onyx \
+            "refs/tags/${ONYX_RELEASE_TAG}:refs/tags/${ONYX_RELEASE_TAG}"
+          actual="$(git rev-parse "refs/tags/${ONYX_RELEASE_TAG}^{commit}")"
+          if [[ "${actual}" != "${ONYX_RELEASE_COMMIT}" ]]; then
+            echo "::error::Tag ${ONYX_RELEASE_TAG} is ${actual}, not ${ONYX_RELEASE_COMMIT}."
+            exit 1
+          fi
+          # onyx is the main stack. onyx-restore gets no .env: restore.sh copies it.
+          for dir in onyx onyx-restore; do
+            mkdir -p "${RUNNER_TEMP}/${dir}"
+            git archive "${ONYX_RELEASE_TAG}" deployment/docker_compose deployment/data |
+              tar -x -C "${RUNNER_TEMP}/${dir}"
+            cp product/deploy/compose.override.yml "${RUNNER_TEMP}/${dir}/deployment/docker_compose/"
+          done
+          product/deploy/make-env.sh "${RUNNER_TEMP}/onyx/deployment/docker_compose"
+      - name: Start the stack
+        timeout-minutes: 25
+        run: |
+          cd "${RUNNER_TEMP}/onyx/deployment/docker_compose"
+          docker compose pull --quiet
+          docker compose up -d
+          deadline=$((SECONDS + 900))
+          until curl -fs -o /dev/null --max-time 10 http://localhost:3000/api/health; do
+            if ((SECONDS >= deadline)); then
+              echo "::error::The API is not healthy after 15 minutes."
+              exit 1
+            fi
+            sleep 10
+          done
+      - name: Register test users
+        run: |
+          register() {
+            local prefix="$1" email="$2" password
+            password="Ci1-$(openssl rand -hex 16)"
+            echo "::add-mask::${password}"
+            jq -n --arg email "${email}" --arg password "${password}" \
+              '{email: $email, password: $password}' |
+              curl -fsS -o /dev/null -X POST -H 'Content-Type: application/json' \
+                --data @- http://localhost:3000/api/auth/register
+            printf '%s_EMAIL=%s\n%s_PASSWORD=%s\n' \
+              "${prefix}" "${email}" "${prefix}" "${password}" >>"${GITHUB_ENV}"
+          }
+          # The first registered user becomes the admin.
+          register ADMIN admin@example.com
+          register USER_A user-a@example.com
+          register USER_B user-b@example.com
+      - name: Run functional checks
+        # CI has no model provider: skip the chat steps and the model answers.
+        timeout-minutes: 30
+        run: |
+          for step in index search privacy update delete; do
+            python3 product/test-corpus/run_checks.py --base-url http://localhost:3000 \
+              --state "${RUNNER_TEMP}/checks-state.json" --skip-chat "${step}"
+          done
+      - name: Back up, then restore into a separate project
+        timeout-minutes: 15
+        run: |
+          compose_dir="${RUNNER_TEMP}/onyx/deployment/docker_compose"
+          product/deploy/backup.sh "${compose_dir}" "${RUNNER_TEMP}/backup"
+          (cd "${compose_dir}" && docker compose stop)
+          HOST_PORT=3100 HOST_PORT_80=8100 product/deploy/restore.sh "${RUNNER_TEMP}/backup" \
+            "${RUNNER_TEMP}/onyx-restore/deployment/docker_compose" onyx-restore
+      - name: Search the restored stack
+        timeout-minutes: 5
+        run: |
+          curl -fsS --max-time 10 http://localhost:3100/api/health
+          cp "${RUNNER_TEMP}/checks-state.json" "${RUNNER_TEMP}/restore-state.json"
+          python3 product/test-corpus/run_checks.py --base-url http://localhost:3100 \
+            --state "${RUNNER_TEMP}/restore-state.json" --skip-chat search
+      # A job timeout cancels the job. Then failure() is false, so also check cancelled().
+      - name: Collect logs
+        if: failure() || cancelled()
+        timeout-minutes: 5
+        run: |
+          logs="${RUNNER_TEMP}/logs"
+          mkdir -p "${logs}"
+          docker ps -a >"${logs}/containers.txt" 2>&1 || true
+          (cd "${RUNNER_TEMP}/onyx/deployment/docker_compose" &&
+            docker compose logs --no-color --timestamps) >"${logs}/onyx.log" 2>&1 || true
+          (cd "${RUNNER_TEMP}/onyx-restore/deployment/docker_compose" &&
+            docker compose -p onyx-restore logs --no-color --timestamps) >"${logs}/onyx-restore.log" 2>&1 || true
+          tail -n 50 "${logs}/onyx.log" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v4
+        if: failure() || cancelled()
+        with:
+          name: e2e-logs
+          path: ${{ runner.temp }}/logs
+          if-no-files-found: ignore
+          retention-days: 7
