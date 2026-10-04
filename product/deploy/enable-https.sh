@@ -19,6 +19,7 @@ overlay="${compose_dir}/compose.https.yml"
 certbot_dir="$(dirname "${compose_dir}")/data/certbot"
 health_timeout="${HTTPS_HEALTH_TIMEOUT:-300}"
 rsa_key_size=4096
+production_server=https://acme-v02.api.letsencrypt.org/directory
 # Upstream init-letsencrypt.sh uses this subject for the dummy certificate.
 dummy_subject="/CN=localhost"
 redirect_dir="$(dirname "${compose_dir}")/data/nginx-extra"
@@ -135,10 +136,11 @@ if [[ "${issuer}" == *"CN=localhost"* || "${issuer}" == *"CN = localhost"* ]]; t
   pass "Let's Encrypt certificate issued. nginx reloaded."
 elif [[ "${issuer}" == *"(STAGING)"* && "${STAGING:-0}" != 1 ]]; then
   # Keep the staging files until the trusted certificate replaces them, so nginx can restart.
+  # The renewal file of the lineage names the staging server. Name the production one explicitly.
   echo "The certificate is from the Let's Encrypt staging CA. Replacing it with a trusted one."
   compose run --rm --no-deps --entrypoint certbot certbot certonly --webroot -w /var/www/certbot \
     -d "${domain}" --email "${email}" --agree-tos --no-eff-email --rsa-key-size "${rsa_key_size}" \
-    --non-interactive --force-renewal ||
+    --non-interactive --force-renewal --server "${production_server}" ||
     die "certbot did not replace the staging certificate. The staging certificate stays in place."
   compose exec nginx nginx -s reload
   pass "Trusted Let's Encrypt certificate issued. nginx reloaded."
@@ -149,8 +151,17 @@ fi
 # --- 6. Verify ---------------------------------------------------------------------------------
 curl_tls=(curl -fsS --max-time 20 -o /dev/null)
 [[ "${STAGING:-0}" == 1 ]] && curl_tls+=(--insecure)
+# nginx loads a new certificate after a reload; give its workers a few seconds.
+https_ok() {
+  local tries
+  for tries in 1 2 3 4 5 6; do
+    "${curl_tls[@]}" "$1" && return 0
+    ((tries < 6)) && sleep 5
+  done
+  return 1
+}
 for path in /nginx-health /api/health; do
-  if "${curl_tls[@]}" "https://${domain}${path}"; then
+  if https_ok "https://${domain}${path}"; then
     pass "https://${domain}${path} answers 200."
   else
     fail "https://${domain}${path} does not answer 200."
