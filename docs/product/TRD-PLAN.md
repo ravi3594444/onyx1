@@ -304,6 +304,11 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | 18 | owner | `d5a6f09` | PASS: invite-only sign-up on (`invite_only_enabled` false to true), owner already admin (`...vm-owner-run18.txt`). |
 | 20 | restart | `49f3973` | PASS, all steps: `down`, `up -d`, health, `public-url`, volumes kept, `search` 8 of 8, `privacy` 7 of 7 (`...vm-restart-run20.txt`). |
 | 19 | https | `49f3973` | PASS: redirect block on `172.18.0.12:80` only; `https://<domain>/api/health` and `/nginx-health` 200 (Let's Encrypt production, `CN=YE1`); `http://<domain>/` 301 (`...vm-https-run19.txt`). |
+| 22 | verify | `63fb7d0` | PASS, all steps over the public HTTPS URL with invite-only sign-up on: index, search 8 of 8, privacy 7 of 7, update, delete, pruning race, backup, isolated restore (`...vm-verify-run22.txt`). |
+| 23 | keygen | `76a452e` | PASS: RSA key pair in `/srv/onyx/secrets/inbox.pem` (mode 600), public key printed so a model key can be sealed to the VM without a repository secret (`...vm-keygen-run23.txt`). |
+| 24 | model (list) | `76a452e` | PASS: the sealed Fireworks key was unsealed on the VM; the provider lists 5 DeepSeek models (`...vm-model-run24-list.txt`). |
+| 25 | model | `76a452e` | PASS, 8 of 8: provider `fireworks_ai` model `deepseek-v4p1-flash` created as "22nd X AI model" and set as default; `/api/admin/llm/test` 200; a chat answered in 2.1 s (`...vm-model-run25.txt`). |
+| 26 | https | `7fcdd63` | PASS: HTTPS 200, HTTP 301, production certificate. `docker compose ps` shows `web_server` running `ghcr.io/ravi3594444/onyx1/onyx-web-server:v4.8.4-axi.1@sha256:055acb43...` (`...vm-https-run26-branded.txt`). |
 
 ### Results on the VM (run 9, commit `6fdf922`)
 
@@ -320,8 +325,8 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | Isolated restore | PASS. Port 3100 healthy in about 50 s; `search` 8 of 8 and `privacy` 7 of 7 on the copy; live stack started again afterwards. |
 | Restart | PASS (runs 10 and 20). `docker compose down` then `up -d`: all containers recreated in about 2 minutes, the 10 named volumes unchanged, indexed documents and access rules intact (`search` 8 of 8, `privacy` 7 of 7), public HTTPS URL back with 200. Sessions live in Redis and end with a restart. |
 | Public HTTPS URL | PASS (run 19). Trusted certificate, 200 over HTTPS, 301 from plain HTTP. The certbot service renews every 12 h; nginx reloads every 6 h. |
-| Chat and citations | BLOCKED: no model provider credentials. |
-| Branding | BLOCKED: no Business license. License enforcement stays on. |
+| Chat and citations | PASS for the model connection (run 25: Fireworks DeepSeek v4.1 flash answers in about 2 s). Knowledge-grounded answers with citations: see the `verify-with-chat` row in the run table. |
+| Branding | PASS for the own MIT-covered web image (run 26 serves `v4.8.4-axi.1`; the live HTML carries the 22nd X AI title and tagline, `...vm-branding-live.txt`). Native Enterprise theming stays BLOCKED without a Business license; enforcement stays on. |
 
 ### Resources (run 9, after the checks, idle)
 

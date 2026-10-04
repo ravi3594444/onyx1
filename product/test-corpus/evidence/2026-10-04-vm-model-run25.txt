@@ -1,0 +1,103 @@
+# Bootstrap dev VM run 25 (model (configure Fireworks DeepSeek)), commit 76a452e2da75cfa781831617fe34022b316d6db6, GitHub Actions job 111470356438
+# https://github.com/ravi3594444/onyx1/actions/runs/37213880892
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  keygen) args="keygen" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: model
+  WEB_DOMAIN: https://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: accounts/fireworks/models/deepseek-v4p1-flash
+  SEALED_MODEL_KEY:
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T154146Z-model
+
+== vm-bootstrap model fireworks_ai accounts/fireworks/models/deepseek-v4p1-flash 76a452e2da75cfa781831617fe34022b316d6db6 2026-10-04T15:41:46Z ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+
+== source at 76a452e2da75cfa781831617fe34022b316d6db6 ==
+76a452e2da75cfa781831617fe34022b316d6db6 2026-10-04T15:30:49+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': CI accepts the branded web image; sealed model key
+PASS login as admin@example.com and /api/me: {"status": 200, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS list providers, look for '22nd X AI model': {"count": 0, "existing": null, "default_text": null}
+PASS create provider '22nd X AI model': {"status": 200, "provider": "fireworks_ai", "model": "accounts/fireworks/models/deepseek-v4p1-flash", "api_base": null, "result": {"id": 1, "name": "22nd X AI model", "provider": "fireworks_ai", "api_base": null, "is_public": true, "models": [{"name": "accounts/fireworks/models/deepseek-v4p1-flash", "is_visible": true}]}}
+PASS set provider 1 model 'accounts/fireworks/models/deepseek-v4p1-flash' as default: {"status": 200, "body": null}
+PASS provider list shows our model as the only model and as the default: {"models": ["accounts/fireworks/models/deepseek-v4p1-flash"], "default_text": {"provider_id": 1, "model_name": "accounts/fireworks/models/deepseek-v4p1-flash"}}
+PASS /api/admin/llm/test accepts the provider: {"status": 200, "body": null}
+PASS /api/admin/llm/test/default answers with the default provider: {"status": 200, "body": null}
+PASS chat answers 'Reply with the single word OK': {"answer": "OK", "seconds": 2.1, "error": null, "chat_session_id": "cb6c70d6-7047-4f34-8808-672f14e71408"}
+PASS step configure-model: 8 checks passed
