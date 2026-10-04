@@ -1,5 +1,6 @@
 import { BRANDING } from "@/lib/branding";
 import { cn } from "@opal/utils";
+import type { IconProps } from "@opal/types";
 
 interface BrandMarkProps {
   size: number;
@@ -28,5 +29,19 @@ export default function BrandMark({
         className="object-cover object-center w-full h-full"
       />
     </div>
+  );
+}
+
+// The mark as an icon component, for slots that take an IconFunctionComponent.
+// Those slots size the icon through `style` (width/height) or `size`.
+export function BrandIcon({ size, className, style }: IconProps) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      alt=""
+      src={BRANDING.LOGO_SRC}
+      className={cn("shrink-0 rounded-full object-cover", className)}
+      style={{ width: size, height: size, ...style }}
+    />
   );
 }

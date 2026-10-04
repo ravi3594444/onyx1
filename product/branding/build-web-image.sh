@@ -17,11 +17,15 @@ upstream_url="https://github.com/onyx-dot-app/onyx"
 source_dir="${repo_root}"
 tags=()
 no_cache=""
+# --cloud builds the multi-tenant variant: NEXT_PUBLIC_CLOUD_ENABLED is a Next.js build-time
+# value, so the single-tenant and the multi-tenant stacks need two images.
+cloud=""
 while (($# > 0)); do
   case "$1" in
     --source) source_dir="$2"; shift 2 ;;
     --tag) tags+=("$2"); shift 2 ;;
     --no-cache) no_cache="--no-cache"; shift ;;
+    --cloud) cloud=1; shift ;;
     -h | --help) sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -37,8 +41,9 @@ if [[ ! "${ONYX_RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "ONYX_RELEASE_TAG is not a release tag: '${ONYX_RELEASE_TAG}'" >&2
   exit 2
 fi
+variant="axi${cloud:+-cloud}"
 if ((${#tags[@]} == 0)); then
-  tags=("onyx-web-server:${ONYX_RELEASE_TAG}-axi")
+  tags=("onyx-web-server:${ONYX_RELEASE_TAG}-${variant}")
 fi
 
 # The tag must exist in the source git directory; fetch it from upstream if not.
@@ -83,6 +88,9 @@ build_args=(
   --build-arg "ONYX_VERSION=${ONYX_RELEASE_TAG}"
   --build-arg "NODE_OPTIONS=--max-old-space-size=8192"
 )
+if [[ -n "${cloud}" ]]; then
+  build_args+=(--build-arg "NEXT_PUBLIC_CLOUD_ENABLED=true")
+fi
 tag_args=()
 for tag in "${tags[@]}"; do tag_args+=(--tag "${tag}"); done
 
@@ -90,7 +98,7 @@ iidfile="${work}/image-id"
 DOCKER_BUILDKIT=1 docker build ${no_cache} \
   --file "${work}/web/Dockerfile" \
   --label "org.opencontainers.image.source=${upstream_url}" \
-  --label "org.opencontainers.image.version=${ONYX_RELEASE_TAG}-axi" \
+  --label "org.opencontainers.image.version=${ONYX_RELEASE_TAG}-${variant}" \
   --label "org.opencontainers.image.revision=${commit}" \
   "${build_args[@]}" "${tag_args[@]}" \
   --iidfile "${iidfile}" \

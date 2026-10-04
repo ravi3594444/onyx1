@@ -1,0 +1,137 @@
+# 22nd X AI multi-tenant validation overlay for the Onyx v4.8.4 Docker Compose deployment.
+# vm-bootstrap.sh mt-up copies this file into /srv/onyx-mt/deployment/docker_compose and runs:
+#   COMPOSE_FILE=docker-compose.yml:compose.override.yml:compose.mt.yml docker compose -p onyx-mt ...
+# Validation only. It runs next to the live single-tenant project "onyx". See README.md here.
+#
+# The application settings are the ones of the upstream overlay
+# deployment/docker_compose/docker-compose.multitenant.yml (tag v4.8.4). The upstream
+# development overlay docker-compose.dev.yml is not used: it publishes the internal ports.
+
+# A different project name gives separate containers, networks and volumes (onyx-mt_*).
+# vm-bootstrap.sh also gives -p onyx-mt and writes COMPOSE_PROJECT_NAME=onyx-mt into .env.
+name: onyx-mt
+
+services:
+  api_server:
+    # Upstream: the base "alembic upgrade head" refuses to run with MULTI_TENANT=true. The
+    # schema_private migrations create the public tables. Tenant schemas migrate on sign-up.
+    command: >
+      /bin/sh -c "alembic -n schema_private upgrade head &&
+      echo \"Starting Onyx Api Server\" &&
+      uvicorn onyx.main:app --host 0.0.0.0 --port 8080"
+    environment:
+      - MULTI_TENANT=true
+      - AUTH_TYPE=cloud
+      # Tenant provisioning is Enterprise Edition code. With MULTI_TENANT=true the license
+      # check gives the EE features without a license (check_ee_features_enabled).
+      - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true
+      # Cloud auth needs SMTP for the verification email. This stack has no SMTP.
+      - REQUIRE_EMAIL_VERIFICATION=false
+      # Upstream sets it on api_server only. Without it, a new company sign-up posts to the
+      # control plane and fails with 500 (provisioning.py:157), and invites call billing
+      # (manage/users.py:682-731). This stack has no control plane.
+      - DEV_MODE=true
+      # No control plane: every company counts as on trial. Lift the trial caps.
+      - USAGE_LIMITS_ENABLED=false
+      - NUM_FREE_TRIAL_USER_INVITES=100000
+      # Default 5 pre-builds 5 tenant schemas (app_configs.py:1992).
+      - TARGET_AVAILABLE_TENANTS=1
+      # No cross-tenant impersonation (ee/onyx/configs/app_configs.py:151).
+      - SUPER_USERS=[]
+      # Default true. Creates the OpenSearch index of a tenant when it is first used.
+      - VERIFY_CREATE_OPENSEARCH_INDEX_ON_INIT_MT=true
+    depends_on:
+      mt_minio_bucket:
+        condition: service_completed_successfully
+        required: false
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_API_SERVER_MEM_LIMIT:-2g}"
+
+  background:
+    environment:
+      - MULTI_TENANT=true
+      - AUTH_TYPE=cloud
+      - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true
+      - REQUIRE_EMAIL_VERIFICATION=false
+      # See api_server. Upstream does not set it here; the background tasks also provision
+      # tenants and call the control plane without it.
+      - DEV_MODE=true
+      # No control plane: every company counts as on trial. Lift the trial caps.
+      - USAGE_LIMITS_ENABLED=false
+      - NUM_FREE_TRIAL_USER_INVITES=100000
+      - TARGET_AVAILABLE_TENANTS=1
+      - SUPER_USERS=[]
+      - VERIFY_CREATE_OPENSEARCH_INDEX_ON_INIT_MT=true
+      # Lower peak memory during indexing (upstream default: 6 threads).
+      - CELERY_WORKER_DOCPROCESSING_CONCURRENCY=${MT_DOCPROCESSING_CONCURRENCY:-2}
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_BACKGROUND_MEM_LIMIT:-4g}"
+
+  web_server:
+    environment:
+      - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_WEB_SERVER_MEM_LIMIT:-1g}"
+
+  inference_model_server:
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_MODEL_SERVER_MEM_LIMIT:-3g}"
+
+  indexing_model_server:
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_MODEL_SERVER_MEM_LIMIT:-3g}"
+
+  opensearch:
+    environment:
+      # Upstream fixes the heap at 2g in docker-compose.yml. Compose merges environment by
+      # key, so this value replaces it. Keep Xms equal to Xmx.
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_OPENSEARCH_MEM_LIMIT:-2g}"
+
+  relational_db:
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_RELATIONAL_DB_MEM_LIMIT:-2g}"
+
+  # With MULTI_TENANT=true the api_server does not create the file store bucket
+  # (onyx/main.py:428-431; cloud uses IaC). This one-shot job creates it. The MinIO image
+  # ships mc (its health check uses it). Same profile as minio.
+  mt_minio_bucket:
+    image: ${BASE_IMAGE_REGISTRY:-docker.io}/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5
+    profiles: ["s3-filestore"]
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - MC_CONFIG_DIR=/tmp/.mc
+      - MT_BUCKET=${S3_FILE_STORE_BUCKET_NAME:-onyx-file-store-bucket}
+    # $$ keeps the values for the container shell; they come from .env (env_file).
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        mc alias set mt http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
+        && mc mb --ignore-existing "mt/$$MT_BUCKET"
+
+  nginx:
+    # Only on the loopback interface, port 3200. The live stack keeps 80, 443 and 3000.
+    ports: !override
+      - "127.0.0.1:3200:80"
