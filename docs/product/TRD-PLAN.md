@@ -214,30 +214,52 @@ and growth. Measure again with the real corpus before changing the VM size.
 
 ### Re-run with exit codes (4 October 2026)
 
-`run_checks.py`, `backup.sh` and `restore.sh` now fail the command when a check fails. The
-re-run below uses them against the live sandbox stack. Raw output is in
-`product/test-corpus/evidence/`. Each log records the exit code of every step.
+`run_checks.py`, `backup.sh` and `restore.sh` fail the command when a check fails. The runs
+below used them against the live sandbox stack. The untrimmed output is in
+`product/test-corpus/evidence/*.txt`. Each log names its commit and records every exit code.
 
-| Run | Step | Exit code | Checks |
-| --- | --- | --- | --- |
-| Full (`2026-10-04-sandbox-run.log`) | index, search, privacy | 0 | 15 of 15 pass |
-| | chat | 1 | 4 of 6 pass. Q2 and Q3 fail: the stand-in model answers without Search. |
-| | chat-forced | 1 | 2 of 4 pass. Same Q2 and Q3 failures. |
-| | update | 1 | Re-index (20 s) and search pass. The model answer for Q2 fails. |
-| | delete | 1 | Deletion reaches search in 5 s. The model answer for Q3 fails. |
-| Model-free, as in CI (`2026-10-04-sandbox-run-skip-chat.log`) | index, search, privacy, update, delete | 0 for all | 20 of 20 pass |
+Full run with the stand-in model (`2026-10-04-sandbox-run.txt`, commit `856785a`):
 
-Backup and restore (`2026-10-04-sandbox-backup-restore.log`):
+| Step | Exit code | Checks |
+| --- | --- | --- |
+| index | 0 | 2 of 2 pass |
+| search | 0 | 8 of 8 pass, including the owner control: user B finds the restricted file, user A and the admin do not |
+| chat | 1 | 3 of 6 pass (Q1, Q5 for user A, Q5 for user B). Q2, Q3 and Q4 fail: the stand-in model does not search, or answers in general terms. |
+| chat-forced | 1 | 2 of 5 pass (Q1, Q5). Same Q2, Q3 and Q4 failures. |
+| privacy | 0 | 7 of 7 pass |
+| update | 1 | Re-index and search pass. The model answer for Q2 fails. |
+| delete | 1 | Deletion reaches search. The model answer for Q3 fails. |
+
+Model-free run, the same steps as CI (`2026-10-04-sandbox-run-skip-chat.txt`, commit `b0d7ba6`):
+index, search, privacy, update and delete all exit 0. 23 checks pass and 2 model answers are
+`SKIP`. The update step waits for its prune (see below).
+
+Backup and restore (`2026-10-04-sandbox-backup-restore.txt`, commit `0525118`; these scripts did
+not change after it):
 
 | Test | Exit code | Result |
 | --- | --- | --- |
-| Backup with a forced copy failure | 125 | Stack started again (11 containers, health 200). No backup folder. |
-| Backup | 0 | 80 s downtime. All files mode 600. |
-| Restore into the live project | 1 | Refused before any change. Live volume unchanged. |
-| Restore with a different `.env` | 1 | Refused. No volumes created. |
-| Isolated restore on port 3100 | 0 | Healthy in 46 s. `background` not started. `search` and `privacy` exit 0 on the copy. |
-| Whole-connector deletion (manual API test) | n/a | cc-pair 404 and no documents in search within about 5 s. |
+| T1 backup with a forced copy failure | 1 | Stack started again (11 containers, health 200). No backup folder, no partial folder. |
+| T2 backup | 0 | 86 s downtime. All files mode 600. |
+| T3 restore into the live project | 1 | Refused: the project has containers. Live volume unchanged. |
+| T4 restore with a different `.env` | 1 | Refused. No volumes created. |
+| T5 MinIO root password differs from `S3_AWS_SECRET_ACCESS_KEY` | 1 | Refused before `.env` was written. No volumes. |
+| T6 secret exported in the shell | 1 | Refused. No volumes. |
+| T7 isolated restore on port 3100 | 0 | Healthy in 51 s. `background` not started. `search` (8 of 8) and `privacy` (7 of 7) exit 0 on the copy. |
 
-CI and deployment: `.github/workflows/axi-product-ci.yml` and `axi-deploy-dev.yml` are on the
-branch. GitHub lists 0 workflows for the fork, because Actions is not enabled. The owner must
-enable Actions before any run can happen (RUNBOOK section 11). No CI run exists yet.
+Whole-connector deletion (`2026-10-04-sandbox-connector-delete.txt`): pause plus
+`deletion-attempt` removed each test connector. The cc-pair returned 404 after 3 to 20 s, and
+search then returned no documents.
+
+### CI on GitHub
+
+The owner enabled Actions on 4 October 2026. Results of `axi-product-ci.yml` on this branch:
+
+- Static checks and compose config passed on every push run after the first one.
+- Run #6 failed the `ruff-format` check on a checkpoint commit. The next commit fixed it.
+- Run #3 (manual e2e) was cancelled by a push. The workflow now groups manual runs apart.
+- Run #8 (manual e2e) failed in `delete`: the removed file stayed in search for 900 s. Cause,
+  from the Onyx logs: the update step's prune still ran, and Onyx v4.8.4 then starts no prune
+  for removed files ("Failed to trigger pruning", HTTP 200). The update step now waits for its
+  prune. RUNBOOK section 7a tells operators how to handle this.
+- Run #11 (manual e2e, commit `b0d7ba6`): result below.

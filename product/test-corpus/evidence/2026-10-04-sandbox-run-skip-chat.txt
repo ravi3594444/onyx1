@@ -1,45 +1,46 @@
 # Model-free run of run_checks.py (--skip-chat), the same steps as CI e2e. Onyx v4.8.4 sandbox.
-# Started 2026-10-04T10:08:29Z. Commit: 856785a
+# Started 2026-10-04T10:24:25Z. Commit: b0d7ba6
 
-## step index (10:08:29Z)
-PASS new index attempt on cc-pair 6 indexes 4 documents: {"seconds": 20.5, "timeout_seconds": 900, "attempt_id": 9, "status": "success", "indexing": false, "num_docs_indexed": 4}
-index: {"cc_pair_id": 6, "documents": 4, "seconds_upload_to_indexed": 21.0, "seconds_waiting_for_indexing": 20.5}
-PASS hr-salary-bands-restricted.md in user B project reaches COMPLETED: {"owner": "bob@example.com", "project_id": 5, "statuses": ["COMPLETED"], "seconds": 5.1}
+## step index (10:24:25Z)
+PASS new index attempt on cc-pair 8 indexes 4 documents: {"seconds": 15.4, "timeout_seconds": 900, "attempt_id": 13, "status": "success", "indexing": false, "num_docs_indexed": 4}
+index: {"cc_pair_id": 8, "documents": 4, "seconds_upload_to_indexed": 15.5, "seconds_waiting_for_indexing": 15.4}
+PASS hr-salary-bands-restricted.md in user B project reaches COMPLETED: {"owner": "bob@example.com", "project_id": 7, "statuses": ["COMPLETED"], "seconds": 5.1}
 PASS step index: 2 checks passed
 ## exit code for index: 0
 
-## step search (10:08:56Z)
-PASS search Q1 as alice@example.com: {"expected_top": "expense-policy.md", "seconds": 0.27, "top_titles": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md", "refund-policy-2025.md"]}
-PASS search Q2 as alice@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.08, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
-PASS search Q3 as alice@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.3, "top_titles": ["refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
-PASS search Q4 as alice@example.com: {"expected_top": null, "seconds": 0.17, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
-PASS search Q5 as alice@example.com: {"expected_top": null, "seconds": 0.24, "top_titles": ["expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
-PASS search shows hr-salary-bands-restricted.md to its owner bob@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+## step search (10:24:46Z)
+PASS search Q1 as alice@example.com: {"expected_top": "expense-policy.md", "seconds": 0.26, "top_titles": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md", "refund-policy-2025.md"]}
+PASS search Q2 as alice@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.07, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q3 as alice@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.26, "top_titles": ["refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q4 as alice@example.com: {"expected_top": null, "seconds": 0.2, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q5 as alice@example.com: {"expected_top": null, "seconds": 0.26, "top_titles": ["expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner bob@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
 PASS search hides KESTREL-7731 from alice@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
 PASS search hides KESTREL-7731 from owner-admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
 PASS step search: 8 checks passed
 ## exit code for search: 0
 
-## step privacy (10:08:58Z)
+## step privacy (10:24:48Z)
 PASS user B can read own chat session: {"status": 200}
-PASS user B project list shows own project: {"status": 200, "body": [{"id": 1, "name": "HR private", "description": null, "created_at": "2026-10-04T05:30:05.220952Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": [{"id": "785a9bca-ac37-4b54-95b1-7c99d260efdf", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T05:41:39.626273+00:00", "time_updated": "2026-10-04T05:41:39.626273+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}, {"id": 2, "name": "HR private", "description": null, "created_at": "2026-10-04T08:17:39.528985Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": [{"id": "59dd7f43-d739-40f5-adad-a687f1c9e66d", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T08:26:31.955025+00:00", "time_updated": "2026-10-04T08:26:31.955025+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}, {"id": 3, "name": "HR private", "description": null, "created_at": "2026-10-04T08:31:39.448108Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": []}, {"id": 4, "name": "HR private", "description": null, "created_at": "2026-10-04T09:48:36.187391Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": [{"id": "42da64a1-06ef-4f1c-a48e-5d3d8ea1be0f", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T09:59:37.395215+00:00", "time_updated": "2026-10-04T09:59:37.395215+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}, {"id": 5, "name": "HR private", "description": null, "created_at": "2026-10-04T10:08:50.999263Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": []}]}
-PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "c2832587-ab92-47bc-a28e-b9dadf389864", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "file_id": "5a311123-6a51-4e56-8c5a-ffcb2fccfd4e", "created_at": "2026-10-04T10:08:51.082335", "status": "COMPLETED", "last_accessed_at": "2026-10-04T10:08:51.081614Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 103, "chunk_count": 1}]}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 1, "name": "HR private", "description": null, "created_at": "2026-10-04T05:30:05.220952Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": [{"id": "785a9bca-ac37-4b54-95b1-7c99d260efdf", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T05:41:39.626273+00:00", "time_updated": "2026-10-04T05:41:39.626273+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}, {"id": 2, "name": "HR private", "description": null, "created_at": "2026-10-04T08:17:39.528985Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": [{"id": "59dd7f43-d739-40f5-adad-a687f1c9e66d", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T08:26:31.955025+00:00", "time_updated": "2026-10-04T08:26:31.955025+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}, {"id": 3, "name": "HR private", "description": null, "created_at": "2026-10-04T08:31:39.448108Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": []}, {"id": 4, "name": "HR private", "description": null, "created_at": "2026-10-04T09:48:36.187391Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": [{"id": "42da64a1-06ef-4f1c-a48e-5d3d8ea1be0f", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T09:59:37.395215+00:00", "time_updated": "2026-10-04T09:59:37.395215+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}, {"id": 5, "name": "HR private", "description": null, "created_at": "2026-10-04T10:08:50.999263Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": []}, {"id": 6, "name": "HR private", "description": null, "created_at": "2026-10-04T10:23:10.239520Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": []}, {"id": 7, "name": "HR private", "description": null, "created_at": "2026-10-04T10:24:41.466317Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": []}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "aa33968d-f9f6-46e0-9fb0-1818dcb6195c", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "file_id": "de2f066f-e1d0-49b9-a325-c7d0e8bd1692", "created_at": "2026-10-04T10:24:41.529873", "status": "COMPLETED", "last_accessed_at": "2026-10-04T10:24:41.529223Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 103, "chunk_count": 1}]}
 PASS user A can read own chat session: {"status": 200}
 PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
 PASS user A project list hides user B project: {"status": 200, "body": []}
-PASS user A file status lookup hides user B file c2832587-ab92-47bc-a28e-b9dadf389864: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file aa33968d-f9f6-46e0-9fb0-1818dcb6195c: {"status": 200, "body": []}
 PASS step privacy: 7 checks passed
 ## exit code for privacy: 0
 
-## step update (10:08:59Z)
-PASS new index attempt on cc-pair 6 indexes 4 documents: {"seconds": 20.4, "timeout_seconds": 900, "attempt_id": 10, "status": "success", "indexing": false, "num_docs_indexed": 4}
-update applied: {"seconds": 20.4}
+## step update (10:24:49Z)
+PASS new index attempt on cc-pair 8 indexes 4 documents: {"seconds": 20.3, "timeout_seconds": 900, "attempt_id": 14, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS prune after the update removes the old version: {"seconds": 0.0, "timeout_seconds": 900, "before": null, "last_pruned": "2026-10-04T10:25:02.784700Z"}
+update applied: {"seconds": 20.5}
 PASS search shows the new support hours and not the old ones: {"new_hours_found": true, "old_hours_found": false}
 SKIP chat Q2 after update: "--skip-chat: no model answer"
-PASS step update: 2 checks passed, 1 skipped
+PASS step update: 3 checks passed, 1 skipped
 ## exit code for update: 0
 
-## step delete (10:09:19Z)
+## step delete (10:25:10Z)
 PASS search finds refund-policy-2025.md before deletion: {"titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
 PASS deletion of refund-policy-2025.md reaches search: {"seconds": 5.2, "timeout_seconds": 900, "titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
 PASS search hides refund-policy-2025.md and shows refund-policy-2026.md: {"titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
@@ -47,4 +48,4 @@ SKIP chat Q3 after deletion: "--skip-chat: no model answer"
 PASS step delete: 3 checks passed, 1 skipped
 ## exit code for delete: 0
 
-# Finished 2026-10-04T10:09:25Z
+# Finished 2026-10-04T10:25:16Z
