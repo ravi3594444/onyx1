@@ -120,12 +120,18 @@ fi
 
 # --- 4. Start nginx with the production template ------------------------------------------------
 compose up -d
+# nginx renders the redirect block at start. Recreate it, so that the current command, mounts
+# and template apply even when compose sees no change.
+compose up -d --force-recreate --no-deps nginx
 deadline=$((SECONDS + health_timeout))
 until [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://localhost/nginx-health || true)" == 200 ]]; do
   ((SECONDS < deadline)) ||
     die "http://localhost/nginx-health is not 200 after ${health_timeout} s. Inspect: cd ${compose_dir} && docker compose logs nginx"
   sleep 5
 done
+echo "redirect block in nginx:"
+# shellcheck disable=SC2016
+compose exec -T nginx sh -c 'echo "addresses: $(hostname -i)"; grep -n "listen\|server_name" /etc/nginx/conf.d/zz-redirect.conf || echo "zz-redirect.conf is missing"' || true
 pass "nginx answers on port 80."
 
 # --- 5. Issue a trusted certificate if the dummy or a staging certificate is in place ---
