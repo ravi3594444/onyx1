@@ -1,0 +1,144 @@
+# Bootstrap dev VM run 19 (https), commit 49f39737ec311cb7814ac7240f714e7a36c343c5, GitHub Actions job 111456381599
+# https://github.com/ravi3594444/onyx1/actions/runs/37209084717
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: https
+  WEB_DOMAIN: https://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL: ravi80847949@gmail.com
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+
+== vm-bootstrap https my-knowledge.duckdns.org 49f39737ec311cb7814ac7240f714e7a36c343c5 2026-10-04T14:23:41Z (mode=production) ==
+
+== source at 49f39737ec311cb7814ac7240f714e7a36c343c5 ==
+49f39737ec311cb7814ac7240f714e7a36c343c5 2026-10-04T14:23:20+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': recreate nginx in enable-https.sh
+PASS: my-knowledge.duckdns.org resolves to this host (***).
+PASS: .env sets DOMAIN=my-knowledge.duckdns.org, WEB_DOMAIN=https://my-knowledge.duckdns.org, COMPOSE_FILE=docker-compose.yml:compose.override.yml:compose.https.yml.
+PASS: options-ssl-nginx.conf and ssl-dhparams.pem are in /srv/onyx/deployment/data/certbot/conf.
+PASS: redirect block for my-knowledge.duckdns.org is in /srv/onyx/deployment/data/nginx-extra/redirect.conf.template.
+A certificate exists at /etc/letsencrypt/live/my-knowledge.duckdns.org/fullchain.pem.
+ Container onyx-minio-1 Running
+ Container onyx-background-1 Running
+ Container onyx-cache-1 Running
+ Container onyx-opensearch-1 Running
+ Container onyx-nginx-1 Running
+ Container onyx-certbot-1 Running
+ Container onyx-indexing_model_server-1 Running
+ Container onyx-api_server-1 Running
+ Container onyx-relational_db-1 Running
+ Container onyx-inference_model_server-1 Running
+ Container onyx-web_server-1 Running
+ Container onyx-api_server-1 Waiting
+ Container onyx-web_server-1 Waiting
+ Container onyx-api_server-1 Healthy
+ Container onyx-web_server-1 Healthy
+ Container onyx-nginx-1 Recreate
+ Container onyx-nginx-1 Recreated
+ Container onyx-nginx-1 Starting
+ Container onyx-nginx-1 Started
+redirect block in nginx:
+addresses: 172.18.0.12
+3:# LISTEN_LINES placeholder with one listen line per address of the container at every start
+5:# The block listens on those addresses only. Requests from the internet arrive there, so
+8:# 127.0.0.1, which only the upstream port-80 block listens on, so they reach the app.
+10:    listen 172.18.0.12:80;
+11:    server_name my-knowledge.duckdns.org;
+PASS: nginx answers on port 80.
+PASS: The certificate is not the dummy (issuer=C=US, O=Let's Encrypt, CN=YE1). No issuance needed.
+PASS: https://my-knowledge.duckdns.org/nginx-health answers 200.
+PASS: https://my-knowledge.duckdns.org/api/health answers 200.
+PASS: http://my-knowledge.duckdns.org/ redirects (301).
+HTTPS is enabled for https://my-knowledge.duckdns.org. The certbot service renews the certificate every 12 h.
+https://my-knowledge.duckdns.org/api/health answers 200.
+
+== docker compose ps ==
+NAME                            IMAGE                                                                                                                                   COMMAND                  SERVICE                  CREATED          STATUS                    PORTS
+onyx-api_server-1               onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd                                  "/bin/sh -c 'alembic…"   api_server               30 minutes ago   Up 30 minutes (healthy)
+onyx-background-1               onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd                                  "/bin/sh -c ' if [ -…"   background               30 minutes ago   Up 30 minutes
+onyx-cache-1                    docker.io/library/redis:7.4-alpine                                                                                                      "docker-entrypoint.s…"   cache                    30 minutes ago   Up 30 minutes             6379/tcp
+onyx-certbot-1                  certbot/certbot:v5.8.0@sha256:f70ad0adbb7e117f0fe42a63c553f28ea451edabc0148757b6efcd9735acaa20                                          "/bin/sh -c 'trap ex…"   certbot                  30 minutes ago   Up 30 minutes             80/tcp, 443/tcp
+onyx-indexing_model_server-1    onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   indexing_model_server    30 minutes ago   Up 30 minutes (healthy)
+onyx-inference_model_server-1   onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   inference_model_server   30 minutes ago   Up 30 minutes (healthy)
+onyx-minio-1                    docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5   "/usr/bin/docker-ent…"   minio                    30 minutes ago   Up 30 minutes (healthy)   9000/tcp
+onyx-nginx-1                    docker.io/library/nginx:1.25.5-alpine                                                                                                   "/docker-entrypoint.…"   nginx                    17 seconds ago   Up 6 seconds (healthy)    0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp
+onyx-opensearch-1               docker.io/opensearchproject/opensearch:3.6.0                                                                                            "./opensearch-docker…"   opensearch               30 minutes ago   Up 30 minutes             9200/tcp, 9300/tcp, 9600/tcp, 9650/tcp
+onyx-relational_db-1            docker.io/library/postgres:15.2-alpine                                                                                                  "docker-entrypoint.s…"   relational_db            30 minutes ago   Up 30 minutes (healthy)   5432/tcp
+onyx-web_server-1               onyxdotapp/onyx-web-server:v4.8.4@sha256:9a5049f57dae444fa0c7bacbea60174598af8d6e624579ff45a0bbd26975a030                               "node server.js"         web_server               30 minutes ago   Up 30 minutes (healthy)
+
+== https complete: https://my-knowledge.duckdns.org ==

@@ -10,6 +10,8 @@ import { cn } from "@opal/utils";
 import Text from "@/refresh-components/texts/Text";
 import Truncated from "@/refresh-components/texts/Truncated";
 import { SvgOnyxLogo, SvgOnyxLogoTyped } from "@opal/logos";
+import BrandMark from "@/components/branding/BrandMark";
+import { BRANDING } from "@/lib/branding";
 
 export interface LogoProps {
   folded?: boolean;
@@ -25,7 +27,8 @@ export function Logo({ folded, size, className, onyxBranded }: LogoProps) {
   const resolvedSize = size ?? DEFAULT_LOGO_SIZE_PX;
   const { enterprise, logoUrl } = useSettings();
   const logoDisplayStyle = enterprise?.logo_display_style;
-  const applicationName = enterprise?.application_name;
+  // The licensed name wins; otherwise the 22nd X AI name and mark.
+  const applicationName = enterprise?.application_name?.trim() || BRANDING.NAME;
 
   if (onyxBranded) {
     return folded ? (
@@ -51,7 +54,7 @@ export function Logo({ folded, size, className, onyxBranded }: LogoProps) {
       />
     </div>
   ) : (
-    <SvgOnyxLogo size={resolvedSize} className={cn("shrink-0", className)} />
+    <BrandMark size={resolvedSize} className={className} />
   );
 
   const renderNameAndPoweredBy = (opts: {
@@ -95,11 +98,5 @@ export function Logo({ folded, size, className, onyxBranded }: LogoProps) {
   }
 
   // Handle "logo_and_name" or default behavior
-  return applicationName ? (
-    renderNameAndPoweredBy({ includeLogo: true, includeName: true })
-  ) : folded ? (
-    <SvgOnyxLogo size={resolvedSize} className={cn("shrink-0", className)} />
-  ) : (
-    <SvgOnyxLogoTyped size={resolvedSize} className={className} />
-  );
+  return renderNameAndPoweredBy({ includeLogo: true, includeName: true });
 }
