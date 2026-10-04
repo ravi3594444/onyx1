@@ -5,7 +5,7 @@ Each step prints evidence; read it against the expected evidence in README.md.
 
 Usage:
   python3 run_checks.py --base-url http://localhost:3000 --state state.json STEP
-Steps: index, search, chat, privacy, update, delete.
+Steps: index, search, chat, chat-forced, privacy, update, delete.
 Credentials come from env vars ADMIN_EMAIL/ADMIN_PASSWORD, USER_A_EMAIL/
 USER_A_PASSWORD (not in HR) and USER_B_EMAIL/USER_B_PASSWORD (HR stand-in).
 """
@@ -93,6 +93,19 @@ class OnyxSession:
         except json.JSONDecodeError:
             return status, text
 
+    def stream_lines(self, path: str, json_body: Any) -> list[dict[str, Any]]:
+        """Posts JSON and returns the NDJSON packets of a streamed response."""
+        # __init__ allows only http and https base URLs.
+        request = urllib.request.Request(  # noqa: S310
+            self.base_url + path,
+            data=json.dumps(json_body).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with self.opener.open(request, timeout=900) as response:
+            expect(response.status == 200, f"{path} returned {response.status}")
+            return [json.loads(line) for line in response if line.strip()]
+
     def upload(self, path: str, files: list[Path], fields: dict[str, str]) -> Any:
         boundary = uuid.uuid4().hex
         parts: list[bytes] = []
@@ -128,12 +141,26 @@ def log(label: str, value: Any) -> None:
     print(f"{label}: {json.dumps(value, ensure_ascii=False)}", flush=True)
 
 
-def wait_for_indexing(admin: OnyxSession, cc_pair_id: int, expected_docs: int) -> float:
+def latest_attempt_id(admin: OnyxSession, cc_pair_id: int) -> int:
+    _, page = admin.request(
+        "GET",
+        f"/api/manage/admin/cc-pair/{cc_pair_id}/index-attempts?page_num=0&page_size=1",
+    )
+    items = page.get("items") or []
+    return int(items[0]["id"]) if items else 0
+
+
+def wait_for_indexing(
+    admin: OnyxSession, cc_pair_id: int, expected_docs: int, after_attempt_id: int = 0
+) -> float:
+    """Waits for an index attempt newer than after_attempt_id to succeed."""
     started = time.time()
+    info: Any = None
     while time.time() - started < 900:
         _, info = admin.request("GET", f"/api/manage/admin/cc-pair/{cc_pair_id}")
         if (
-            info.get("num_docs_indexed") == expected_docs
+            latest_attempt_id(admin, cc_pair_id) > after_attempt_id
+            and info.get("num_docs_indexed") == expected_docs
             and info.get("last_index_attempt_status") == "success"
             and not info.get("indexing")
         ):
@@ -176,8 +203,15 @@ def search_contents(session: OnyxSession, query: str) -> str:
 
 
 def ask(
-    session: OnyxSession, question: str, project_id: int | None = None
+    session: OnyxSession,
+    question: str,
+    project_id: int | None = None,
+    forced_tool_id: int | None = None,
 ) -> dict[str, Any]:
+    """Sends one chat message with streaming, as the web UI does.
+
+    Streaming keeps the nginx connection alive while a slow model works.
+    """
     _, created = session.request(
         "POST",
         "/api/chat/create-chat-session",
@@ -188,32 +222,41 @@ def ask(
         },
     )
     started = time.time()
-    status, data = session.request(
-        "POST",
+    packets = session.stream_lines(
         "/api/chat/send-chat-message",
         {
             "message": question,
             "chat_session_id": created["chat_session_id"],
             "parent_message_id": -1,
             "file_descriptors": [],
-            "stream": False,
+            "forced_tool_id": forced_tool_id,
+            "stream": True,
             "include_citations": True,
             "origin": "api",
         },
     )
-    expect(status == 200, f"chat returned {status}: {data}")
-    cited_ids = {c["document_id"] for c in data.get("citation_info") or []}
-    titles = {
-        d["document_id"]: d["semantic_identifier"]
-        for d in data.get("top_documents") or []
-    }
+    answer_parts: list[str] = []
+    cited_ids: set[str] = set()
+    titles: dict[str, str] = {}
+    errors: list[str] = []
+    for packet in packets:
+        if "error" in packet:
+            errors.append(str(packet["error"]))
+        obj = packet.get("obj") or {}
+        packet_type = obj.get("type")
+        if packet_type == "message_delta":
+            answer_parts.append(obj.get("content") or "")
+        elif packet_type == "citation_info":
+            cited_ids.add(obj["document_id"])
+        for doc in obj.get("documents") or obj.get("final_documents") or []:
+            titles[doc["document_id"]] = doc["semantic_identifier"]
     return {
         "chat_session_id": created["chat_session_id"],
         "seconds": round(time.time() - started, 1),
-        "answer": (data.get("answer_citationless") or data.get("answer") or "").strip(),
+        "answer": "".join(answer_parts).strip(),
         "cited": sorted(titles.get(doc_id, doc_id) for doc_id in cited_ids),
         "retrieved": sorted(set(titles.values())),
-        "error": data.get("error_msg"),
+        "error": errors or None,
     }
 
 
@@ -391,13 +434,16 @@ def step_update(base_url: str, state: dict[str, Any]) -> None:
     )
     temp_file = Path(tempfile.mkdtemp()) / guide_name
     temp_file.write_text(updated)
+    previous_attempt_id = latest_attempt_id(admin, state["cc_pair_id"])
     started = time.time()
     admin.upload(
         f"/api/manage/admin/connector/{state['connector_id']}/files/update",
         [temp_file],
         {"file_ids_to_remove": json.dumps([state["file_ids"][guide_name]])},
     )
-    wait_for_indexing(admin, state["cc_pair_id"], len(PUBLIC_FILES))
+    wait_for_indexing(
+        admin, state["cc_pair_id"], len(PUBLIC_FILES), previous_attempt_id
+    )
     log("update applied", {"seconds": round(time.time() - started, 1)})
     log(
         "search after update",
@@ -433,10 +479,29 @@ def step_delete(base_url: str, state: dict[str, Any]) -> None:
     log("chat Q3 after deletion", ask(admin, QUESTIONS["Q3"]))
 
 
+def search_tool_id(session: OnyxSession) -> int:
+    _, tools = session.request("GET", "/api/tool")
+    return next(t["id"] for t in tools if t.get("in_code_tool_id") == "SearchTool")
+
+
+def step_chat_forced(base_url: str, _state: dict[str, Any]) -> None:
+    """Repeats Q1-Q4 with the Search tool forced, to separate retrieval from tool choice."""
+    user_a = OnyxSession(
+        base_url, os.environ["USER_A_EMAIL"], os.environ["USER_A_PASSWORD"]
+    )
+    tool_id = search_tool_id(user_a)
+    for key in ("Q1", "Q2", "Q3", "Q4"):
+        log(
+            f"chat {key} as {user_a.email} with search forced",
+            ask(user_a, QUESTIONS[key], forced_tool_id=tool_id),
+        )
+
+
 STEPS = {
     "index": step_index,
     "search": step_search,
     "chat": step_chat,
+    "chat-forced": step_chat_forced,
     "privacy": step_privacy,
     "update": step_update,
     "delete": step_delete,
