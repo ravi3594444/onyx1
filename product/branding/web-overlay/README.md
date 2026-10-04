@@ -40,6 +40,7 @@ only the fallbacks that upstream hard-codes as "Onyx".
 | `web/src/app/auth/signup/page.tsx` | Cloud sign-up: the Google URL (button and "or" divider) only when `oauthEnabled` |
 | `web/src/app/auth/join/page.tsx` | Cloud join: same `oauthEnabled` gate |
 | `web/src/sections/modals/NewTenantModal.tsx` | Team name fallback `BRANDING.NAME` instead of `onyx.app` when `NEXT_PUBLIC_APP_DOMAIN` is unset ("...teammates of 22nd X AI") |
+| `web/src/sections/modals/NewTeamModal.tsx` | Cloud build: a failed "existing team by domain" lookup (it needs the Onyx control plane) closes the dialog instead of showing an error to every new company owner |
 | `web/src/sections/sidebar/AdminSidebar.tsx` | A failed billing fetch (no control plane) hides "Upgrade Plan"; "Plans & Billing" is already hidden because `hasSubscription` is false |
 | `web/lib/shared/tokens/semantic-light.json` | `theme-primary-04/05/06` and `action-text-link-05` set to the accent (`#3656e8`, hover `#4f6cee`, active `#2a46c4`) |
 | `web/lib/shared/tokens/semantic-dark.json` | Same tokens as light tints (`#8ea0f2`, `#a9b7f5`, `#7085ee`) so dark text stays readable on them |
