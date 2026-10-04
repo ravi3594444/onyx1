@@ -313,6 +313,7 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | 18 (deploy) | auto-deploy | `7fcdd63` | PASS: `https://my-knowledge.duckdns.org/api/health` 200 after the deploy of main. |
 | 31 | mt-up | `7fcdd63` | PASS: isolated multi-tenant stack `onyx-mt` (own volumes, own Postgres, OpenSearch, MinIO and Redis) healthy at `127.0.0.1:3200` with the branded web image; host memory 4.0 GiB available with both stacks up (`...vm-mt-up-run31.txt`). |
 | 32 | mt-check | `7fcdd63` | PASS, 42 of 42: Company A and B owners register uninvited and each gets its own workspace with admin capability; the invited member joins A as a basic user; B's invitation lands in B only; users, documents, search, chats, connectors, agents, files, projects and personal API keys stay inside their company (`...vm-mt-check-run32.txt`). |
+| 33 | mt-restart | `7fcdd63` | PASS: `down` and `up -d` of the `onyx-mt` stack, health 200, the same volumes, then 29 of 29 company checks again: both owners keep their workspace and admin capability, the member stays basic in A, documents, search, chats, connectors, agents, files, projects and API keys stay separated (`...vm-mt-restart-run33.txt`). |
 
 ### Results on the VM (run 9, commit `6fdf922`)
 

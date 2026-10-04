@@ -158,7 +158,7 @@ development VM next to the live single-tenant install. Evidence:
 | Chats | PASS. B gets 404 on A's chat session; A's member gets 403 on the owner's session. |
 | Connectors, agents, files, projects | PASS. Each owner lists only their own connector and persona; B gets 404 on A's persona and user file; project lists do not cross. The member sees A's persona only when it is public. |
 | APIs | PASS. A personal API key of A's owner resolves to A and searches only A's documents. |
-| Repeat after restart | See the `mt-check-after-restart` row in `TRD-PLAN.md`. |
+| Repeat after restart | PASS. `mt-restart` (run 33) recreated every container and repeated 29 checks: same workspaces, same roles, same separation (`...-vm-mt-restart-run33.txt`). |
 
 Not covered by these runs: email delivery (no SMTP), the invite accept and deny modal of the
 cloud web build (the stack ran the single-tenant branded image), billing pages, and the
