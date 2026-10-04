@@ -278,11 +278,12 @@ There are no changes to upstream source files.
 
 ## 11. CI and deployment pipeline
 
-We added two workflows. The 50 upstream workflows stay unchanged.
+We added four workflows (with `axi-check-dev-ssh.yml`). The 50 upstream workflows stay unchanged.
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
 | `axi-product-ci.yml` ("22nd X AI product checks") | Pull requests, and pushes to `main` and `claude/**`, that change `product/`, `docs/product/` or `axi-*.yml`; manual run | `static`: pre-commit hooks on our files (large files, YAML, `ripsecrets`, `shellcheck`, `ruff`, `ruff-format`, `actionlint`, `zizmor`), `py_compile`, `bash -n`. `compose-config`: exports the tag from `release.env`, checks its commit, runs `make-env.sh`, checks the services and the image digests. `e2e` (push to `main` or manual run): starts the stack, registers 3 users, runs `index`, `search`, `privacy`, `update` and `delete` with `--skip-chat`, backs up, restores into `onyx-restore` on port 3100, and runs `search` there. |
+| `axi-bootstrap-dev.yml` ("Bootstrap dev VM") | Manual run from `main` only | Runs `product/deploy/vm-bootstrap.sh` on the VM over SSH. Actions: `inspect` (read-only), `install` (Docker, host settings, release files, `make-env.sh` only if `.env` is missing, `up -d`), `verify` and `verify-with-chat` (cleanup, checks, `prune_race.py`, backup, isolated restore on port 3100), `restart` (`down` without `-v`, `up -d`, then `search` and `privacy` with the state of the last `verify`), `https` and `https-staging` (`enable-https.sh` for `my-knowledge.duckdns.org`; needs the `letsencrypt_email` input). Evidence goes to `/srv/onyx/evidence/<time>/` and to the run artifact. |
 | `axi-deploy-dev.yml` ("Deploy 22nd X AI dev") | The product checks pass on a push to `main`; manual run from `main` | A manual run first checks that the product checks passed on `main` for that commit. Then it runs `product/deploy/deploy-remote.sh` on the VM over SSH. One deploy at a time. |
 
 CI has no model provider. Thus `e2e` does not run `chat` and `chat-forced`, and it skips the
