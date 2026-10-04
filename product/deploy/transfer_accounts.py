@@ -252,8 +252,25 @@ def register(args: argparse.Namespace) -> None:
     owner = next(a for a in accounts if a["role"] == "owner")
     members = [a for a in accounts if a["role"] == "member"]
     if owner.get("existing_tenant"):
-        # An earlier cutover created the company. Its owner password is unknown here, so
-        # no invitation can be sent. copy-sql still copies the hashes into that company.
+        # Trust a company only when an earlier run of this transfer created it. Anyone can
+        # sign up on the public URL, so an unknown company with the owner's address may
+        # belong to somebody else: stop, and copy no password hash into it.
+        if owner.get("created_tenant") != owner["existing_tenant"]:
+            fail(
+                "the owner's address already has a company in onyx-saas that this "
+                "transfer did not create; nothing was copied. Check that company first."
+            )
+        foreign = [
+            m
+            for m in members
+            if m.get("existing_tenant")
+            and m["existing_tenant"] != owner["created_tenant"]
+        ]
+        if foreign:
+            fail(
+                f"{len(foreign)} accounts already have another company in onyx-saas; "
+                "nothing was copied. Check those companies first."
+            )
         missing = [m for m in members if not m.get("existing_tenant")]
         print("owner: has a company in onyx-saas already; no sign-up")
         print(
@@ -272,9 +289,20 @@ def register(args: argparse.Namespace) -> None:
         fail(
             f"the owner is not admin of a new company after the sign-up (status {status})"
         )
+    tenant = str(me.get("team_name") or "")
+    if not tenant.startswith("tenant_"):
+        fail("/api/me of the owner shows no company id after the sign-up")
     owner["registered"] = True
+    owner["created_tenant"] = tenant
     save(args.file, data)
     print("owner: signed up through the web form request; admin of a new company")
+
+    foreign = [m for m in members if m.get("existing_tenant")]
+    if foreign:
+        fail(
+            f"{len(foreign)} accounts already have a company in onyx-saas that this "
+            "transfer did not create; nothing was copied. Check those companies first."
+        )
 
     new_members = [m for m in members if not m.get("existing_tenant")]
     if new_members:
@@ -325,6 +353,9 @@ def register(args: argparse.Namespace) -> None:
 
 def copy_targets(data: dict[str, Any], schema: str) -> list[tuple[int, dict[str, Any]]]:
     """Accounts whose user row is in <schema>: new sign-ups and earlier transfers."""
+    owner = next(a for a in accounts_of(data) if a["role"] == "owner")
+    if owner.get("created_tenant") != schema:
+        fail("the target company is not the one that this transfer created")
     return [
         (index, account)
         for index, account in enumerate(accounts_of(data))
