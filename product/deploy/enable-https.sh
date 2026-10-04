@@ -96,11 +96,12 @@ for name in options-ssl-nginx.conf ssl-dhparams.pem; do
     install -m 644 "${script_dir}/tls/${name}" "${certbot_dir}/conf/${name}"
 done
 pass "options-ssl-nginx.conf and ssl-dhparams.pem are in ${certbot_dir}/conf."
-# Port 80 on the container address answers the ACME challenge and redirects everything else
-# to HTTPS. The nginx command fills in the address at start (compose.https.yml).
+# Port 80 on the container addresses answers the ACME challenge and redirects everything else
+# to HTTPS. render-redirect.sh fills in the addresses at every nginx start.
 sed "s/\${DOMAIN}/${domain}/g" "${script_dir}/nginx/redirect.conf.template" >"${redirect_dir}/redirect.conf.template.tmp"
 mv "${redirect_dir}/redirect.conf.template.tmp" "${redirect_dir}/redirect.conf.template"
 rm -f "${redirect_dir}/redirect.conf"
+install -m 0644 "${script_dir}/nginx/render-redirect.sh" "${redirect_dir}/render-redirect.sh"
 pass "redirect block for ${domain} is in ${redirect_dir}/redirect.conf.template."
 
 live="/etc/letsencrypt/live/${domain}"

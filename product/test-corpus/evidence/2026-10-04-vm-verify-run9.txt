@@ -1,0 +1,474 @@
+# Bootstrap dev VM run 9 (verify), commit 6fdf9226c1fe2598316356aae715416c405f3d96, GitHub Actions job 111448288184
+# https://github.com/ravi3594444/onyx1/actions/runs/37206368343
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: verify
+  WEB_DOMAIN: https://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL: 
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T133915Z
+
+== vm-bootstrap verify 6fdf9226c1fe2598316356aae715416c405f3d96 2026-10-04T13:39:15Z (with_chat=0) ==
+http://localhost/api/health answers 200.
+
+== source at 6fdf9226c1fe2598316356aae715416c405f3d96 ==
+6fdf9226c1fe2598316356aae715416c405f3d96 2026-10-04T13:38:51+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': public-url step and health diagnostics
+
+== test users ==
+admin@example.com exists already ({"error_code":"BAD_REQUEST","detail":"REGISTER_USER_ALREADY_EXISTS"})
+user-a@example.com exists already ({"error_code":"BAD_REQUEST","detail":"REGISTER_USER_ALREADY_EXISTS"})
+user-b@example.com exists already ({"error_code":"BAD_REQUEST","detail":"REGISTER_USER_ALREADY_EXISTS"})
+admin@example.com has the admin capability.
+
+== step public-url ==
+ERROR: https://my-knowledge.duckdns.org/api/health answers 301, not 200.
+-- curl https://my-knowledge.duckdns.org/api/health
+*  issuer: C=US; O=Let's Encrypt; CN=YE1
+*  SSL certificate verify ok.
+* TLSv1.2 (OUT), TLS header, Supplemental data (23):
+> GET /api/health HTTP/1.1
+> Host: my-knowledge.duckdns.org
+> User-Agent: curl/7.81.0
+> Accept: */*
+> 
+* TLSv1.2 (IN), TLS header, Supplemental data (23):
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+* TLSv1.2 (IN), TLS header, Supplemental data (23):
+* TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+* old SSL session ID is stale, removing
+* TLSv1.2 (IN), TLS header, Supplemental data (23):
+* Mark bundle as not supporting multiuse
+< HTTP/1.1 301 Moved Permanently
+< Server: nginx
+< Date: Sun, 04 Oct 2026 13:40:18 GMT
+< Content-Type: text/html
+< Content-Length: 162
+< Connection: keep-alive
+< Location: https://my-knowledge.duckdns.org/api/health
+< 
+* Connection #0 to host my-knowledge.duckdns.org left intact
+http_code=301 ssl_verify_result=0 remote_ip=*** time_total=0.034100
+onyx-api_server-1 Up 32 minutes (healthy) 
+onyx-background-1 Up 32 minutes 
+onyx-cache-1 Up 32 minutes 6379/tcp
+onyx-certbot-1 Up 32 minutes 80/tcp, 443/tcp
+onyx-indexing_model_server-1 Up 32 minutes (healthy) 
+onyx-inference_model_server-1 Up 32 minutes (healthy) 
+onyx-minio-1 Up 32 minutes (healthy) 9000/tcp
+onyx-nginx-1 Up 31 minutes (healthy) 0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp
+onyx-opensearch-1 Up 32 minutes 9200/tcp, 9300/tcp, 9600/tcp, 9650/tcp
+onyx-relational_db-1 Up 32 minutes (healthy) 5432/tcp
+onyx-web_server-1 Up 32 minutes (healthy) 
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:39:48 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:39:48 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 2026/10/04 13:39:53 [error] 18#18: *735 connect() failed (111: Connection refused) while connecting to upstream, client: ***, server: , request: "GET /api/health HTTP/1.1", upstream: "http://[::1]:80/api/health", host: "my-knowledge.duckdns.org"
+nginx-1  | 2026/10/04 13:39:53 [warn] 18#18: *735 upstream server temporarily disabled while connecting to upstream, client: ***, server: , request: "GET /api/health HTTP/1.1", upstream: "http://[::1]:80/api/health", host: "my-knowledge.duckdns.org"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:39:53 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:39:53 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:39:58 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:39:58 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:40:03 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:40:03 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:40:08 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:40:08 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:40:13 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:40:13 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 2026/10/04 13:40:18 [error] 18#18: *752 connect() failed (111: Connection refused) while connecting to upstream, client: ***, server: , request: "GET /api/health HTTP/1.1", upstream: "http://[::1]:80/api/health", host: "my-knowledge.duckdns.org"
+nginx-1  | 2026/10/04 13:40:18 [warn] 18#18: *752 upstream server temporarily disabled while connecting to upstream, client: ***, server: , request: "GET /api/health HTTP/1.1", upstream: "http://[::1]:80/api/health", host: "my-knowledge.duckdns.org"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:40:18 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:40:18 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+nginx-1  | 127.0.0.1 - - [04/Oct/2026:13:40:18 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "***"
+nginx-1  | *** - - [04/Oct/2026:13:40:18 +0000] "GET /api/health HTTP/1.1" 301 162 "-" "curl/7.81.0" "-"
+-- step public-url: exit 1
+
+== step cleanup ==
+deleting connector 'Prune race corpus 20261004T121752Z' (cc-pair 3, {"connector_id": 2, "credential_id": 2})
+connector 'Prune race corpus 20261004T121752Z' (cc-pair 3) is deleted
+no 'HR private' projects from earlier runs
+project onyx-restore has no containers and no volumes
+-- step cleanup: exit 0
+
+== step index ==
+PASS new index attempt on cc-pair 4 indexes 4 documents: {"seconds": 40.9, "timeout_seconds": 900, "attempt_id": 4, "status": "success", "indexing": false, "num_docs_indexed": 4}
+index: {"cc_pair_id": 4, "documents": 4, "seconds_upload_to_indexed": 41.2, "seconds_waiting_for_indexing": 40.9}
+PASS hr-salary-bands-restricted.md in user B project reaches COMPLETED: {"owner": "user-b@example.com", "project_id": 2, "statuses": ["COMPLETED"], "seconds": 5.1}
+PASS step index: 2 checks passed
+-- step index: exit 0
+
+== step search ==
+PASS search Q1 as user-a@example.com: {"expected_top": "expense-policy.md", "seconds": 17.01, "top_titles": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md", "refund-policy-2025.md"]}
+PASS search Q2 as user-a@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.18, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q3 as user-a@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.19, "top_titles": ["refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q4 as user-a@example.com: {"expected_top": null, "seconds": 0.16, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q5 as user-a@example.com: {"expected_top": null, "seconds": 0.17, "top_titles": ["expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner user-b@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from user-a@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+-- step search: exit 0
+
+== step privacy ==
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 2, "name": "HR private", "description": null, "created_at": "2026-10-04T13:41:17.541351Z", "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "instructions": null, "chat_sessions": []}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "575f4732-adf3-4e9c-9a45-0374c7cae681", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "file_id": "aade0437-5c1e-4093-b5a9-1086858cf4fa", "created_at": "2026-10-04T13:41:17.908559", "status": "COMPLETED", "last_accessed_at": "2026-10-04T13:41:17.906268Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 0, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file 575f4732-adf3-4e9c-9a45-0374c7cae681: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+-- step privacy: exit 0
+
+== step update ==
+PASS new index attempt on cc-pair 4 indexes 4 documents: {"seconds": 20.4, "timeout_seconds": 900, "attempt_id": 5, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS prune after the update removes the old version: {"seconds": 0.0, "timeout_seconds": 900, "before": null, "last_pruned": "2026-10-04T13:41:50.405016Z"}
+update applied: {"seconds": 20.5}
+PASS search shows the new support hours and not the old ones: {"new_hours_found": true, "old_hours_found": false}
+SKIP chat Q2 after update: "--skip-chat: no model answer"
+PASS step update: 3 checks passed, 1 skipped
+-- step update: exit 0
+
+== step delete ==
+PASS search finds refund-policy-2025.md before deletion: {"titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS deletion of refund-policy-2025.md reaches search: {"seconds": 5.2, "timeout_seconds": 900, "titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides refund-policy-2025.md and shows refund-policy-2026.md: {"titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+SKIP chat Q3 after deletion: "--skip-chat: no model answer"
+PASS step delete: 3 checks passed, 1 skipped
+-- step delete: exit 0
+
+== step prune-race ==
+PASS new index attempt on cc-pair 5 indexes 4 documents: {"seconds": 10.2, "timeout_seconds": 900, "attempt_id": 6, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS all documents of the new connector are in search: {"found": ["FILE_CONNECTOR__064dd607-ada4-447e-b202-f6119b4bdc0d", "FILE_CONNECTOR__c7c492df-1822-499a-a837-b3cffc4950b6", "FILE_CONNECTOR__d9753e0e-83c1-4047-b6a3-2f97ba1a5161", "FILE_CONNECTOR__df85f47e-7b3e-47d9-84dd-6f3d02b48abf"]}
+removal of whatsapp-assistant-product-guide.md during a prune: {"second_prune_started": false, "still_in_search_after_settle": true, "settle_seconds": 60}
+PASS race reproduced: a file removed during a prune stays in search: {"file": "whatsapp-assistant-product-guide.md", "note": "FAIL means the race did not occur in this run"}
+PASS manual prune accepted: {"status": 200, "body": {"success": true, "message": "Successfully created the pruning task.", "data": null}}
+PASS manual prune finished: {"last_pruned": "2026-10-04T13:43:50.388928Z"}
+PASS manual prune removes whatsapp-assistant-product-guide.md from search: {"seconds": 0.1, "remaining": ["FILE_CONNECTOR__c7c492df-1822-499a-a837-b3cffc4950b6", "FILE_CONNECTOR__d9753e0e-83c1-4047-b6a3-2f97ba1a5161", "FILE_CONNECTOR__df85f47e-7b3e-47d9-84dd-6f3d02b48abf"]}
+PASS step prune-race: 6 checks passed
+-- step prune-race: exit 0
+
+== step backup ==
+ Container onyx-nginx-1 Stopping 
+ Container onyx-certbot-1 Stopping 
+ Container onyx-background-1 Stopping 
+ Container onyx-certbot-1 Stopped 
+ Container onyx-nginx-1 Stopped 
+ Container onyx-web_server-1 Stopping 
+ Container onyx-background-1 Stopped 
+ Container onyx-indexing_model_server-1 Stopping 
+ Container onyx-web_server-1 Stopped 
+ Container onyx-api_server-1 Stopping 
+ Container onyx-indexing_model_server-1 Stopped 
+ Container onyx-api_server-1 Stopped 
+ Container onyx-minio-1 Stopping 
+ Container onyx-relational_db-1 Stopping 
+ Container onyx-inference_model_server-1 Stopping 
+ Container onyx-cache-1 Stopping 
+ Container onyx-opensearch-1 Stopping 
+ Container onyx-cache-1 Stopped 
+ Container onyx-minio-1 Stopped 
+ Container onyx-relational_db-1 Stopped 
+ Container onyx-opensearch-1 Stopped 
+ Container onyx-inference_model_server-1 Stopped 
+ Container onyx-inference_model_server-1 Starting 
+ Container onyx-cache-1 Starting 
+ Container onyx-indexing_model_server-1 Starting 
+ Container onyx-certbot-1 Starting 
+ Container onyx-minio-1 Starting 
+ Container onyx-opensearch-1 Starting 
+ Container onyx-relational_db-1 Starting 
+ Container onyx-inference_model_server-1 Started 
+ Container onyx-cache-1 Started 
+ Container onyx-indexing_model_server-1 Started 
+ Container onyx-certbot-1 Started 
+ Container onyx-minio-1 Started 
+ Container onyx-opensearch-1 Started 
+ Container onyx-relational_db-1 Started 
+ Container onyx-api_server-1 Starting 
+ Container onyx-background-1 Starting 
+ Container onyx-api_server-1 Started 
+ Container onyx-web_server-1 Starting 
+ Container onyx-web_server-1 Started 
+ Container onyx-web_server-1 Waiting 
+ Container onyx-api_server-1 Waiting 
+ Container onyx-background-1 Started 
+ Container onyx-web_server-1 Healthy 
+ Container onyx-api_server-1 Healthy 
+ Container onyx-nginx-1 Starting 
+ Container onyx-nginx-1 Started 
+Backup in /srv/backups/20261004T134355Z. Downtime: 81 s.
+-- step backup: exit 0
+
+== step restore ==
+
+== release files v4.8.4 into /srv/onyx-restore/deployment/docker_compose ==
+Exported v4.8.4 (d15d4451607965e0e349aad231f858596e85ea52) and compose.override.yml.
+stopping the live stack
+ Container onyx-background-1 Stopping 
+ Container onyx-nginx-1 Stopping 
+ Container onyx-certbot-1 Stopping 
+ Container onyx-certbot-1 Stopped 
+ Container onyx-background-1 Stopped 
+ Container onyx-indexing_model_server-1 Stopping 
+ Container onyx-nginx-1 Stopped 
+ Container onyx-web_server-1 Stopping 
+ Container onyx-web_server-1 Stopped 
+ Container onyx-api_server-1 Stopping 
+ Container onyx-indexing_model_server-1 Stopped 
+ Container onyx-api_server-1 Stopped 
+ Container onyx-cache-1 Stopping 
+ Container onyx-minio-1 Stopping 
+ Container onyx-inference_model_server-1 Stopping 
+ Container onyx-opensearch-1 Stopping 
+ Container onyx-relational_db-1 Stopping 
+ Container onyx-minio-1 Stopped 
+ Container onyx-relational_db-1 Stopped 
+ Container onyx-cache-1 Stopped 
+ Container onyx-opensearch-1 Stopped 
+ Container onyx-inference_model_server-1 Stopped 
+./db_volume.tar.gz: OK
+./file-system.tar.gz: OK
+./minio_data.tar.gz: OK
+./opensearch-data.tar.gz: OK
+env.backup: OK
+ Volume onyx-restore_opensearch-data Creating 
+ Volume onyx-restore_model_cache_huggingface Creating 
+ Volume onyx-restore_file-system Creating 
+ Volume onyx-restore_indexing_model_server_logs Creating 
+ Volume onyx-restore_model_cache_huggingface Creating 
+ Volume onyx-restore_indexing_model_server_logs Creating 
+ Volume onyx-restore_opensearch-data Creating 
+ Volume onyx-restore_inference_model_server_logs Creating 
+ Volume onyx-restore_inference_model_server_logs Creating 
+ Volume onyx-restore_minio_data Creating 
+ Volume onyx-restore_file-system Creating 
+ Network onyx-restore_default Creating 
+ Network onyx-restore_default Creating 
+ Volume onyx-restore_background_logs Creating 
+ Volume onyx-restore_background_logs Creating 
+ Volume onyx-restore_db_volume Creating 
+ Volume onyx-restore_db_volume Creating 
+ Volume onyx-restore_api_server_logs Creating 
+ Volume onyx-restore_api_server_logs Creating 
+ Volume onyx-restore_minio_data Creating 
+ Volume onyx-restore_indexing_huggingface_model_cache Creating 
+ Volume onyx-restore_indexing_huggingface_model_cache Creating 
+ Volume onyx-restore_opensearch-data Created 
+ Volume onyx-restore_opensearch-data Created 
+ Volume onyx-restore_model_cache_huggingface Created 
+ Volume onyx-restore_model_cache_huggingface Created 
+ Volume onyx-restore_indexing_huggingface_model_cache Created 
+ Volume onyx-restore_indexing_huggingface_model_cache Created 
+ Volume onyx-restore_api_server_logs Created 
+ Volume onyx-restore_api_server_logs Created 
+ Volume onyx-restore_db_volume Created 
+ Volume onyx-restore_db_volume Created 
+ Volume onyx-restore_background_logs Created 
+ Volume onyx-restore_background_logs Created 
+ Volume onyx-restore_indexing_model_server_logs Created 
+ Volume onyx-restore_indexing_model_server_logs Created 
+ Volume onyx-restore_minio_data Created 
+ Volume onyx-restore_minio_data Created 
+ Volume onyx-restore_inference_model_server_logs Created 
+ Volume onyx-restore_inference_model_server_logs Created 
+ Volume onyx-restore_file-system Created 
+ Volume onyx-restore_file-system Created 
+ Network onyx-restore_default Created 
+ Network onyx-restore_default Created 
+ Container onyx-restore-cache-1 Creating 
+ Container onyx-restore-relational_db-1 Creating 
+ Container onyx-restore-indexing_model_server-1 Creating 
+ Container onyx-restore-inference_model_server-1 Creating 
+ Container onyx-restore-opensearch-1 Creating 
+ Container onyx-restore-minio-1 Creating 
+ Container onyx-restore-opensearch-1 Created 
+ Container onyx-restore-relational_db-1 Created 
+ Container onyx-restore-minio-1 Created 
+ Container onyx-restore-cache-1 Created 
+ Container onyx-restore-inference_model_server-1 Created 
+ Container onyx-restore-api_server-1 Creating 
+ Container onyx-restore-indexing_model_server-1 Created 
+ Container onyx-restore-background-1 Creating 
+ Container onyx-restore-api_server-1 Created 
+ Container onyx-restore-web_server-1 Creating 
+ Container onyx-restore-background-1 Created 
+ Container onyx-restore-web_server-1 Created 
+ Container onyx-restore-nginx-1 Creating 
+ Container onyx-restore-nginx-1 Created 
+ Container onyx-restore-minio-1 Starting 
+ Container onyx-restore-relational_db-1 Starting 
+ Container onyx-restore-cache-1 Starting 
+ Container onyx-restore-inference_model_server-1 Starting 
+ Container onyx-restore-opensearch-1 Starting 
+ Container onyx-restore-minio-1 Started 
+ Container onyx-restore-relational_db-1 Started 
+ Container onyx-restore-cache-1 Started 
+ Container onyx-restore-inference_model_server-1 Started 
+ Container onyx-restore-opensearch-1 Started 
+ Container onyx-restore-api_server-1 Starting 
+ Container onyx-restore-api_server-1 Started 
+ Container onyx-restore-web_server-1 Starting 
+ Container onyx-restore-web_server-1 Started 
+ Container onyx-restore-api_server-1 Waiting 
+ Container onyx-restore-web_server-1 Waiting 
+ Container onyx-restore-web_server-1 Healthy 
+ Container onyx-restore-api_server-1 Healthy 
+ Container onyx-restore-nginx-1 Starting 
+ Container onyx-restore-nginx-1 Started 
+Restored into project onyx-restore. http://localhost:3100/api/health answers 200.
+The background service is not started. Disable the connectors and the bots before you start it.
+-- step restore: exit 0
+
+== step restore-search ==
+PASS search Q1 as user-a@example.com: {"expected_top": "expense-policy.md", "seconds": 15.36, "top_titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md"]}
+PASS search Q2 as user-a@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.26, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search Q3 as user-a@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.22, "top_titles": ["refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q4 as user-a@example.com: {"expected_top": null, "seconds": 0.22, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "refund-policy-2026.md", "expense-policy.md"]}
+PASS search Q5 as user-a@example.com: {"expected_top": null, "seconds": 0.25, "top_titles": ["expense-policy.md", "expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner user-b@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from user-a@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+-- step restore-search: exit 0
+
+== step restore-privacy ==
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 2, "name": "HR private", "description": null, "created_at": "2026-10-04T13:41:17.541351Z", "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "instructions": null, "chat_sessions": []}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "575f4732-adf3-4e9c-9a45-0374c7cae681", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "file_id": "aade0437-5c1e-4093-b5a9-1086858cf4fa", "created_at": "2026-10-04T13:41:17.908559", "status": "COMPLETED", "last_accessed_at": "2026-10-04T13:41:17.906268Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 0, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file 575f4732-adf3-4e9c-9a45-0374c7cae681: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+-- step restore-privacy: exit 0
+
+== step restore-down ==
+project onyx-restore has no containers and no volumes
+-- step restore-down: exit 0
+
+== step live-start ==
+ Container onyx-certbot-1 Starting 
+ Container onyx-indexing_model_server-1 Starting 
+ Container onyx-minio-1 Starting 
+ Container onyx-inference_model_server-1 Starting 
+ Container onyx-relational_db-1 Starting 
+ Container onyx-opensearch-1 Starting 
+ Container onyx-cache-1 Starting 
+ Container onyx-certbot-1 Started 
+ Container onyx-indexing_model_server-1 Started 
+ Container onyx-minio-1 Started 
+ Container onyx-inference_model_server-1 Started 
+ Container onyx-relational_db-1 Started 
+ Container onyx-opensearch-1 Started 
+ Container onyx-cache-1 Started 
+ Container onyx-background-1 Starting 
+ Container onyx-api_server-1 Starting 
+ Container onyx-background-1 Started 
+ Container onyx-api_server-1 Started 
+ Container onyx-web_server-1 Starting 
+ Container onyx-web_server-1 Started 
+ Container onyx-api_server-1 Waiting 
+ Container onyx-web_server-1 Waiting 
+ Container onyx-web_server-1 Healthy 
+ Container onyx-api_server-1 Healthy 
+ Container onyx-nginx-1 Starting 
+ Container onyx-nginx-1 Started 
+http://localhost/api/health answers 200.
+-- step live-start: exit 0
+
+== docker stats ==
+CONTAINER ID   NAME                            CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O     PIDS
+b3ed2abe24c3   onyx-nginx-1                    0.00%     6.379MiB / 15.61GiB   0.04%     1.59kB / 1.43kB   0B / 0B       10
+0db67540ab66   onyx-web_server-1               0.00%     79.77MiB / 15.61GiB   0.50%     2.09kB / 442B     0B / 0B       11
+dd218ac13e1c   onyx-background-1               2.54%     1.8GiB / 15.61GiB     11.53%    432kB / 421kB     0B / 299kB    65
+5f55e2f4d78b   onyx-api_server-1               0.18%     587.4MiB / 15.61GiB   3.67%     114kB / 112kB     0B / 0B       9
+09dd2f3dff54   onyx-indexing_model_server-1    0.22%     319.4MiB / 15.61GiB   2.00%     2.56kB / 126B     0B / 0B       9
+b24779d13668   onyx-inference_model_server-1   0.20%     319.5MiB / 15.61GiB   2.00%     2.47kB / 126B     0B / 0B       9
+a9817fd34cda   onyx-minio-1                    0.09%     209.2MiB / 15.61GiB   1.31%     9.6kB / 5.32kB    0B / 8.19kB   11
+3e2446793a50   onyx-relational_db-1            0.03%     113.3MiB / 15.61GiB   0.71%     187kB / 177kB     0B / 221kB    60
+f24866bd8ebb   onyx-cache-1                    0.68%     4.547MiB / 15.61GiB   0.03%     302kB / 316kB     0B / 0B       6
+2b70c889139b   onyx-certbot-1                  0.00%     1.602MiB / 15.61GiB   0.01%     2.71kB / 126B     0B / 4.1kB    2
+59eb2adfd082   onyx-opensearch-1               5.55%     2.548GiB / 15.61GiB   16.32%    39.3kB / 31.8kB   0B / 15.2MB   73
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989        6509        4726          22        4753        8961
+Swap:              0           0           0
+
+== disk / ==
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        97G   23G   75G  24% /
+
+== summary ==
+step             exit code
+public-url       1
+cleanup          0
+index            0
+search           0
+privacy          0
+update           0
+delete           0
+prune-race       0
+backup           0
+restore          0
+restore-search   0
+restore-privacy  0
+restore-down     0
+live-start       0
+RESULT: FAIL (one or more steps did not exit with 0)
+verify stopped early with exit 1.
+##[error]Process completed with exit code 1.

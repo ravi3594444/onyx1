@@ -266,3 +266,64 @@ The owner enabled Actions on 4 October 2026. Results of `axi-product-ci.yml` on 
   (https://github.com/ravi3594444/onyx1/actions/runs/37195235054). Stack start 2 min 42 s;
   index, search, privacy, update and delete with `--skip-chat` 1 min 13 s; backup and isolated
   restore 2 min 23 s; search on the restored copy 15 s.
+
+## Development VM evidence (4 October 2026)
+
+The first installation on the development VM ran through the workflow `axi-bootstrap-dev.yml`
+(RUNBOOK section 11). The job logs are in `product/test-corpus/evidence/2026-10-04-vm-*.txt`.
+The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
+
+### Environment
+
+- VM `instance-20261004-101329`, Ubuntu 22.04.5, 6 vCPU, 15 GiB RAM, 97 GB disk, no swap.
+- Onyx v4.8.4 (tag commit `d15d445`), image digests from `release.env`. Docker Engine from the
+  official apt repository. `vm.max_map_count=262144` through `/etc/sysctl.d/99-onyx.conf`.
+- URL: https://my-knowledge.duckdns.org (Let's Encrypt, production CA, renewed by the `certbot`
+  service every 12 h). Plain HTTP answers a 301 to HTTPS. Deployed commit at the end of the
+  day: see the last table.
+- License enforcement stays on. No Business license, no model provider and no branding yet.
+
+### Runs
+
+| Run | Action | Commit | Result |
+| --- | --- | --- | --- |
+| 2 | install | `f03e162` | PASS. 11 containers healthy, `/api/health` 200 (`...vm-install-run2.txt`). |
+| 3 | verify | `f03e162` | 10 of 11 steps PASS. `restore` FAIL: the deploy user could not create `/srv/onyx-restore`. Fixed in `3d5843a` (`...vm-verify-run3.txt`). |
+| 4 | https-staging | `bc1e398` | PASS with a staging certificate (`...vm-https-run4-staging.txt`). |
+| 5 | https | `d840c58` | FAIL: the TLS check ran before nginx had reloaded. Fixed in `be37356` (`...vm-https-run5-failed.txt`). |
+| 6 | https | `67c5e58` | PASS: production certificate (`...vm-https-run6.txt`). The 200 that this run and run 4 reported for `/api/health` was a redirect loop; see run 9. |
+| 7 | verify | `67c5e58` | `restore` PASS. All checks FAIL with 403 after login: with `WEB_DOMAIN=https://...` the session cookie is `Secure`, and Python did not send it over `http://localhost`. Fixed in `43859e1`. |
+| 8 | verify | `43859e1` | FAIL before the first check: `https://<domain>/api/health` answered no 200 from the VM (the redirect loop). |
+| 9 | verify | `6fdf922` | All 14 functional steps PASS, including backup and the isolated restore. The new `public-url` step FAIL with the diagnosis: the upstream HTTPS block proxies to `localhost:80` with the domain as Host, and the redirect block answered 301. Fixed in `988982d` (`...vm-verify-run9.txt`). |
+| 10 | restart | `6fdf922` | PENDING |
+| 11 | https | `988982d` | PENDING |
+
+### Results on the VM (run 9, commit `6fdf922`)
+
+| Check | Result |
+| --- | --- |
+| Startup | PASS. `install` and every `live-start` reached `/api/health` 200 within 2 minutes. |
+| Index | PASS. 4 public documents and 1 private project file indexed. |
+| Search | PASS, 8 of 8. Q1 to Q5 return the expected top file. User B finds the restricted file; user A and the admin do not see the marker and get public documents. |
+| Permissions | PASS, 7 of 7. Cross-user chat session 403 "Access denied"; project and file lists hide the other user's data. |
+| Update | PASS. Re-index, prune and search show the new support hours only. Model answer skipped (no model). |
+| Deletion | PASS. The removed 2025 refund policy leaves search in about 5 s. Model answer skipped. |
+| Pruning race | Reproduced: a file removed during a running prune stays in search after 60 s and no second prune starts. The supported manual prune (`POST .../cc-pair/<id>/prune`) removes it in about 20 s. 6 of 6 checks PASS. The race itself is Onyx behaviour and stays open; the workaround is in RUNBOOK section 7a. |
+| Backup | PASS. 87 s downtime, SHA256SUMS verified by the restore. |
+| Isolated restore | PASS. Port 3100 healthy in about 50 s; `search` 8 of 8 and `privacy` 7 of 7 on the copy; live stack started again afterwards. |
+| Restart | PENDING (run 10). |
+| Public HTTPS URL | PENDING (run 11, after the redirect fix). |
+| Chat and citations | BLOCKED: no model provider credentials. |
+| Branding | BLOCKED: no Business license. License enforcement stays on. |
+
+### Resources (run 9, after the checks, idle)
+
+`docker stats`: OpenSearch 2.5 GiB, background 1.8 GiB, api_server 0.6 GiB, two model servers
+0.3 GiB each, MinIO 0.2 GiB, Postgres 0.1 GiB, nginx, Redis and certbot under 10 MiB each.
+Host: 6.5 GiB used of 15.6 GiB, 23 GB disk used of 97 GB. CPU idle below 10 % per container.
+
+### Remaining inputs
+
+1. Model provider credentials: unblocks `chat`, `chat-forced` and the model answers of
+   `update` and `delete` (`verify-with-chat`).
+2. A Business license: unblocks branding and user groups.
