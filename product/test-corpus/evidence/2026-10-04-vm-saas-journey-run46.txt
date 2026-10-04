@@ -1,0 +1,193 @@
+# Bootstrap dev VM run 46 (customer journey, ordinary sign-up, no test-side setup), commit 2581f67983afbd1bbd445c3e54e85933a603c66a, GitHub Actions job 111498051087
+# https://github.com/ravi3594444/onyx1/actions/runs/37223398443
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  keygen) args="keygen" ;;
+  mt-up) args="mt-up ${GITHUB_SHA}" ;;
+  mt-check) args="mt-check ${GITHUB_SHA}" ;;
+  mt-check-after-restart) args="mt-check ${GITHUB_SHA} after-restart" ;;
+  mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
+  mt-down) args="mt-down" ;;
+  mt-destroy) args="mt-destroy" ;;
+  inventory | cutover)
+    # The values go into the remote command line, so allow only plain addresses.
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ "${BOOTSTRAP_ACTION}" == inventory ]]; then
+      args="inventory ${GITHUB_SHA} ${OWNER_EMAIL}"
+    elif [[ ! "${LETSENCRYPT_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::Give letsencrypt_email for the cutover action."; exit 1
+    else
+      args="cutover ${GITHUB_SHA} ${LETSENCRYPT_EMAIL} ${OWNER_EMAIL}"
+    fi
+    ;;
+  rollback) args="rollback ${GITHUB_SHA}" ;;
+  saas-check) args="saas-check ${GITHUB_SHA}" ;;
+  saas-check-after-restart) args="saas-check ${GITHUB_SHA} after-restart" ;;
+  saas-restart) args="saas-restart ${GITHUB_SHA}" ;;
+  saas-journey) args="saas-journey ${GITHUB_SHA}" ;;
+  saas-journey-after-restart) args="saas-journey ${GITHUB_SHA} after-restart" ;;
+  saas-defaults) args="saas-defaults ${GITHUB_SHA}" ;;
+  saas-defaults-dry-run) args="saas-defaults ${GITHUB_SHA} dry-run" ;;
+  saas-update) args="saas-update ${GITHUB_SHA}" ;;
+  saas-down) args="saas-down ${GITHUB_SHA}" ;;
+  assistant-prompt)
+    if [[ ! "${ASSISTANT_MODE}" =~ ^(set|reset|show)$ ]]; then
+      echo "::error::assistant_mode must be set, reset or show."; exit 1
+    fi
+    args="assistant-prompt ${GITHUB_SHA} ${ASSISTANT_MODE}"
+    ;;
+  chat-check) args="chat-check ${GITHUB_SHA}" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: saas-journey
+  WEB_DOMAIN: http://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  SEALED_MODEL_KEY:
+  ASSISTANT_MODE: show
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T181058Z-saas-journey
+
+== vm-bootstrap saas-journey 2581f67983afbd1bbd445c3e54e85933a603c66a 2026-10-04T18:10:58Z (mode=first) ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+
+== source at 2581f67983afbd1bbd445c3e54e85933a603c66a ==
+2581f67983afbd1bbd445c3e54e85933a603c66a 2026-10-04T18:07:33+00:00 fix(deploy): read the platform model settings without a subshell; default the model name
+Reset the per-IP sign-up counters (signup_rate:*).
+Created /srv/onyx-saas/journey-tag.
+Created /srv/onyx-saas/journey-salt (mode 600, value not shown).
+Tag: journey-cd52ca91
+model.env found: the journey checks that no response holds the platform key.
+PASS owner A signs up: {"email": "owner-a-journey-cd52ca91@example.com", "status": 201, "body": {"id": "4e3e841f-5f0c-4b72-8583-bf08f8e2537f", "email": "owner-a-journey-cd52ca91@example.com", "is_active": true, "is_superuser": false, "is_verified": false, "account_type": "STANDARD"}}
+PASS owner A is admin of a new workspace: {"email": "owner-a-journey-cd52ca91@example.com", "team_name": "tenant_6745bfec-43c1-47d4-8205-c974fc6a631f", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS owner B signs up: {"email": "owner-b-journey-cd52ca91@example.com", "status": 201, "body": {"id": "4de445b6-0c33-4555-9b6b-8ff7142c7303", "email": "owner-b-journey-cd52ca91@example.com", "is_active": true, "is_superuser": false, "is_verified": false, "account_type": "STANDARD"}}
+PASS owner B is admin of a new workspace: {"email": "owner-b-journey-cd52ca91@example.com", "team_name": "tenant_d7e0b029-d380-47e1-bd06-32d81ab060e6", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS owners A and B are in different workspaces: {"owner-a": "tenant_6745bfec-43c1-47d4-8205-c974fc6a631f", "owner-b": "tenant_d7e0b029-d380-47e1-bd06-32d81ab060e6"}
+PASS owner A sees '22nd X AI model' as the default model without setup: {"status": 200, "names": ["22nd X AI model", "Deepseek V4P1 Flash"], "provider": "fireworks_ai", "model": "accounts/fireworks/models/deepseek-v4p1-flash"}
+PASS owner B sees '22nd X AI model' as the default model without setup: {"status": 200, "names": ["22nd X AI model", "Deepseek V4P1 Flash"], "provider": "fireworks_ai", "model": "accounts/fireworks/models/deepseek-v4p1-flash"}
+PASS owner A default assistant holds the knowledge rules: {"status": 200, "found_in": {"system_prompt": true, "default_system_prompt": false}}
+PASS owner A chat answers 'Reply with the single word OK' with the platform model: {"chat_session_id": "f711a8d4-df10-4be8-bc80-5f650303e272", "seconds": 2.9, "answer": "OK", "cited": [], "error": null}
+PASS owner A admin provider listing masks the platform key: {"status": 200, "api_key_masked": true, "key_known_to_test": true}
+PASS owner A cannot move the platform provider to a foreign API base: {"status": 400, "body": {"error_code": "VALIDATION_ERROR", "detail": "API base, provider type and/or custom config cannot be changed without changing the API key"}, "api_base": "https://api.example.invalid/v1"}
+PASS the platform provider is unchanged after the refused update: {"before": {"id": 1, "name": "22nd X AI model", "provider": "fireworks_ai", "api_base": null, "api_key_masked": true, "models": ["accounts/fireworks/models/deepseek-v4p1-flash"]}, "after": {"id": 1, "name": "22nd X AI model", "provider": "fireworks_ai", "api_base": null, "api_key_masked": true, "models": ["accounts/fireworks/models/deepseek-v4p1-flash"]}}
+PASS owner A cannot test the stored key against a foreign API base: {"status": 400, "body": {"error_code": "VALIDATION_ERROR", "detail": "API base, provider type and/or custom config cannot be changed without changing the API key"}, "api_base": "https://api.example.invalid/v1"}
+connector Journey corpus A journey-cd52ca91: {"name": "Journey corpus A journey-cd52ca91", "connector_id": 1, "cc_pair_id": 2}
+PASS new index attempt on cc-pair 2 indexes 4 documents: {"seconds": 87.4, "timeout_seconds": 900, "attempt_id": 1, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS hr-salary-bands-restricted.md in owner A private project reaches COMPLETED: {"statuses": ["COMPLETED"], "seconds": 10.2}
+connector Journey corpus B journey-cd52ca91: {"name": "Journey corpus B journey-cd52ca91", "connector_id": 1, "cc_pair_id": 2}
+PASS new index attempt on cc-pair 2 indexes 1 documents: {"seconds": 108.0, "timeout_seconds": 900, "attempt_id": 1, "status": "success", "indexing": false, "num_docs_indexed": 1}
+persona: {"id": 1, "name": "Journey persona A journey-cd52ca91", "is_public": true}
+PASS owner A invites member A: {"status": 200, "body": {"invited_count": 1, "email_invite_status": "DISABLED"}}
+PASS owner A invited list shows member A: {"status": 200, "invited": ["member-a-journey-cd52ca91@example.com"]}
+PASS member A signs up after the invite: {"email": "member-a-journey-cd52ca91@example.com", "status": 201, "body": {"id": "4d26f580-df51-4050-8f7a-3277204329dc", "email": "member-a-journey-cd52ca91@example.com", "is_active": true, "is_superuser": false, "is_verified": false, "account_type": "STANDARD"}}
+PASS member A lands in workspace A without admin capability: {"email": "member-a-journey-cd52ca91@example.com", "team_name": "tenant_6745bfec-43c1-47d4-8205-c974fc6a631f", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["basic", "generate:image", "read:chat", "read:search", "use:llm_gateway", "write:chat"]}
+PASS member A gets 403 on /api/manage/users/accepted?page_num=0&page_size=1000: {"status": 403, "body": {"error_code": "INSUFFICIENT_PERMISSIONS", "detail": "You do not have the required permissions for this action."}}
+PASS owner A user list shows owner A and member A and not owner B: {"status": 200, "emails": ["owner-a-journey-cd52ca91@example.com", "member-a-journey-cd52ca91@example.com"]}
+PASS owner B user list shows owner B and not owner A or member A: {"status": 200, "emails": ["owner-b-journey-cd52ca91@example.com"]}
+PASS member A gets 403 on /api/admin/llm/provider: {"status": 403, "body": {"error_code": "INSUFFICIENT_PERMISSIONS", "detail": "You do not have the required permissions for this action."}}
+PASS member A gets 403 on /api/admin/llm/provider/1: {"status": 403, "body": {"error_code": "INSUFFICIENT_PERMISSIONS", "detail": "You do not have the required permissions for this action."}}
+PASS chat Q1 as member A: {"problems": [], "chat_session_id": "820defc6-c4aa-4a72-bdfc-7702ccf2091d", "seconds": 36.0, "answer": "I'll look up your organization's travel policy for that.The daily meal allowance for domestic business travel is **INR 1,500 per day** [[1]]().\n\nFor context, the same policy sets the international meal allowance at USD 60 per day and a domestic hotel limit of INR 6,000 per night [[1]]().", "cited": ["expense-policy.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q2 as member A: {"problems": [], "chat_session_id": "dd7c1ff6-64c8-447a-bcd6-28c575b33ff2", "seconds": 14.8, "answer": "WhatsApp Assistant support is available **Monday to Saturday, 09:00 to 19:00 IST** [[1]](). The support contact email is support@example.com [[1]]().", "cited": ["whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q3 as member A: {"problems": [], "chat_session_id": "990d8185-d7a7-4e2f-8554-2e849d6cb790", "seconds": 15.9, "answer": "I'll look into our internal documentation for the refund policy.A customer has **30 days from the date of purchase** to request a full refund [[1]]().\n\nA couple of related details from the current policy:\n- From **day 31 to day 60**, the customer can instead request store credit (no full refund) [[1]]().\n- Finance issues the refund to the original payment method within **7 working days** [[1]]().\n\n⚠️ Note: an older 2025 edition of the policy listed a 14-day full-refund window, but it was replaced by the 2026 edition effective 1 June 2026, so the 30-day window is the one currently in force [[1]]()[[2]]().", "cited": ["refund-policy-2025.md", "refund-policy-2026.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q4 as member A: {"problems": [], "chat_session_id": "0de663e6-6269-4f7a-98d9-c3fa17c203f8", "seconds": 30.9, "answer": "I'll look that up for you.The documents available to me don't cover parental leave — the only policy documents I can find are the customer refund policies, the expense and travel policy, and the WhatsApp Assistant product guide. If you need details on parental leave, you'd likely need to check with your HR team or an employee handbook that isn't in this search index.", "cited": [], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q5 as member A: {"problems": [], "chat_session_id": "0431c478-9bb7-462c-b3c3-c0fe71f71a14", "seconds": 38.9, "answer": "The documents I have access to don't cover salary bands or job leveling — the results are expense, refund, and product documentation only, so I can't give you an L4 Senior Software Engineer pay range. For that, your HR/People team's compensation guidelines or the internal comp tool would be the right source.", "cited": [], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q5 as owner A in the private project: {"problems": [], "chat_session_id": "8b399960-be20-44f6-9c41-9b3b02ceeb19", "seconds": 12.7, "answer": "The salary band for a **Senior Software Engineer (L4)** is **₹38 to 46 lakh** annually [[1]]().", "cited": ["hr-salary-bands-restricted.md"], "retrieved": ["hr-salary-bands-restricted.md"], "error": null}
+PASS owner B chat Q1 says that its documents lack the information: {"problems": [], "chat_session_id": "4ce5ace7-b17f-4c85-a0c6-8e7251caf72b", "seconds": 22.2, "answer": "The documents I can access don't cover business travel meal allowances — the only internal file returned is a customer refund policy, which is unrelated to travel expenses. I'd recommend checking with your Finance or HR team for the current per diem rate.", "cited": [], "retrieved": ["refund-policy-2026.md"], "error": null}
+PASS owner B search for Q3 finds its own refund-policy-2026.md: {"titles": ["refund-policy-2026.md"]}
+PASS owner A search finds expense-policy.md and refund-policy-2026.md of company A: {"titles": ["expense-policy.md", "hr-salary-bands-restricted.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md", "refund-policy-2025.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md", "whatsapp-assistant-product-guide.md", "hr-salary-bands-restricted.md"]}
+PASS owner A search returns no document id of company B: {"shared_ids": [], "ids_a": ["2846e1ff-7f09-440a-81e7-5e603ccf4ebf", "FILE_CONNECTOR__16751855-ed06-45c7-a31d-cd657741d259", "FILE_CONNECTOR__3e7aa3b9-0d30-4718-a0ae-bb14b28d244b", "FILE_CONNECTOR__8ccf081b-6bbf-4c83-bea6-7473f6206de3", "FILE_CONNECTOR__bc3775a4-97d1-4ba3-ad09-129e926f5d04"]}
+PASS owner B search for Q1 returns no document of company A: {"titles": ["refund-policy-2026.md"], "leaked_ids": []}
+PASS owner A reads own chat session: {"status": 200}
+PASS owner B cannot read owner A chat session: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "Chat session not found"}}
+PASS member A cannot read owner A chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS owner A reads own user file: {"status": 200}
+PASS owner B cannot read owner A user file: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "File not found"}}
+PASS owner B file status lookup hides owner A user file: {"status": 200, "body": []}
+PASS member A cannot read owner A user file: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "File not found"}}
+PASS member A file status lookup hides owner A user file: {"status": 200, "body": []}
+PASS owner B project list lacks owner A project: {"status": 200, "names": [], "project_id_a": 1}
+PASS owner A connector list shows own connector and not B's: {"status": 200, "names": ["Journey corpus A journey-cd52ca91"]}
+PASS owner B connector list shows own connector and not A's: {"status": 200, "names": ["Journey corpus B journey-cd52ca91"]}
+PASS owner A persona list shows own persona: {"status": 200, "names": ["Assistant", "Journey persona A journey-cd52ca91"]}
+PASS owner B persona list lacks owner A persona: {"status": 200, "names": ["Assistant"]}
+PASS owner B cannot read owner A persona by id: {"status": 404, "name": null}
+PASS member A sees owner A persona only when it is public: {"status": 200, "is_public": true, "visible": true}
+PASS the platform key appears in no response: {"responses_scanned": 158, "paths_with_key": []}
+PASS step journey: 52 checks passed

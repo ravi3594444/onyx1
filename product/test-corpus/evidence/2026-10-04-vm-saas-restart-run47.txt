@@ -1,0 +1,383 @@
+# Bootstrap dev VM run 47 (restart of onyx-saas and the after-restart journey), commit 2581f67983afbd1bbd445c3e54e85933a603c66a, GitHub Actions job 111499672616
+# https://github.com/ravi3594444/onyx1/actions/runs/37223956493
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  keygen) args="keygen" ;;
+  mt-up) args="mt-up ${GITHUB_SHA}" ;;
+  mt-check) args="mt-check ${GITHUB_SHA}" ;;
+  mt-check-after-restart) args="mt-check ${GITHUB_SHA} after-restart" ;;
+  mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
+  mt-down) args="mt-down" ;;
+  mt-destroy) args="mt-destroy" ;;
+  inventory | cutover)
+    # The values go into the remote command line, so allow only plain addresses.
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ "${BOOTSTRAP_ACTION}" == inventory ]]; then
+      args="inventory ${GITHUB_SHA} ${OWNER_EMAIL}"
+    elif [[ ! "${LETSENCRYPT_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::Give letsencrypt_email for the cutover action."; exit 1
+    else
+      args="cutover ${GITHUB_SHA} ${LETSENCRYPT_EMAIL} ${OWNER_EMAIL}"
+    fi
+    ;;
+  rollback) args="rollback ${GITHUB_SHA}" ;;
+  saas-check) args="saas-check ${GITHUB_SHA}" ;;
+  saas-check-after-restart) args="saas-check ${GITHUB_SHA} after-restart" ;;
+  saas-restart) args="saas-restart ${GITHUB_SHA}" ;;
+  saas-journey) args="saas-journey ${GITHUB_SHA}" ;;
+  saas-journey-after-restart) args="saas-journey ${GITHUB_SHA} after-restart" ;;
+  saas-defaults) args="saas-defaults ${GITHUB_SHA}" ;;
+  saas-defaults-dry-run) args="saas-defaults ${GITHUB_SHA} dry-run" ;;
+  saas-update) args="saas-update ${GITHUB_SHA}" ;;
+  saas-down) args="saas-down ${GITHUB_SHA}" ;;
+  assistant-prompt)
+    if [[ ! "${ASSISTANT_MODE}" =~ ^(set|reset|show)$ ]]; then
+      echo "::error::assistant_mode must be set, reset or show."; exit 1
+    fi
+    args="assistant-prompt ${GITHUB_SHA} ${ASSISTANT_MODE}"
+    ;;
+  chat-check) args="chat-check ${GITHUB_SHA}" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: saas-restart
+  WEB_DOMAIN: http://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  SEALED_MODEL_KEY:
+  ASSISTANT_MODE: show
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T181910Z-saas-restart
+
+== vm-bootstrap saas-restart 2581f67983afbd1bbd445c3e54e85933a603c66a 2026-10-04T18:19:10Z ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+
+== source at 2581f67983afbd1bbd445c3e54e85933a603c66a ==
+2581f67983afbd1bbd445c3e54e85933a603c66a 2026-10-04T18:07:33+00:00 fix(deploy): read the platform model settings without a subshell; default the model name
+
+== containers before ==
+onyx-saas-api_server-1 e7c6d68570bf Up 10 minutes (healthy)
+onyx-saas-background-1 b2a03fe8b43d Up 10 minutes
+onyx-saas-cache-1 39abfae28e38 Up 10 minutes
+onyx-saas-certbot-1 6d4f420dba3e Up 16 minutes
+onyx-saas-indexing_model_server-1 24668df4401c Up 10 minutes (healthy)
+onyx-saas-inference_model_server-1 62395c603d70 Up 10 minutes (healthy)
+onyx-saas-minio-1 30beca6b2765 Up 10 minutes (healthy)
+onyx-saas-nginx-1 380ac2cf3b2e Up 9 minutes (healthy)
+onyx-saas-opensearch-1 340696a33484 Up 16 minutes
+onyx-saas-relational_db-1 b00759a569f6 Up 10 minutes (healthy)
+onyx-saas-web_server-1 ccd031c67abc Up 10 minutes (healthy)
+
+== step down ==
+ Container onyx-saas-nginx-1 Stopping
+ Container onyx-saas-certbot-1 Stopping
+ Container onyx-saas-background-1 Stopping
+ Container onyx-saas-certbot-1 Stopped
+ Container onyx-saas-certbot-1 Removing
+ Container onyx-saas-certbot-1 Removed
+ Container onyx-saas-nginx-1 Stopped
+ Container onyx-saas-nginx-1 Removing
+ Container onyx-saas-nginx-1 Removed
+ Container onyx-saas-web_server-1 Stopping
+ Container onyx-saas-background-1 Stopped
+ Container onyx-saas-background-1 Removing
+ Container onyx-saas-web_server-1 Stopped
+ Container onyx-saas-web_server-1 Removing
+ Container onyx-saas-background-1 Removed
+ Container onyx-saas-indexing_model_server-1 Stopping
+ Container onyx-saas-web_server-1 Removed
+ Container onyx-saas-api_server-1 Stopping
+ Container onyx-saas-indexing_model_server-1 Stopped
+ Container onyx-saas-indexing_model_server-1 Removing
+ Container onyx-saas-indexing_model_server-1 Removed
+ Container onyx-saas-api_server-1 Stopped
+ Container onyx-saas-api_server-1 Removing
+ Container onyx-saas-api_server-1 Removed
+ Container onyx-saas-cache-1 Stopping
+ Container onyx-saas-relational_db-1 Stopping
+ Container onyx-saas-inference_model_server-1 Stopping
+ Container onyx-saas-opensearch-1 Stopping
+ Container onyx-saas-mt_minio_bucket-1 Stopping
+ Container onyx-saas-mt_minio_bucket-1 Stopped
+ Container onyx-saas-mt_minio_bucket-1 Removing
+ Container onyx-saas-mt_minio_bucket-1 Removed
+ Container onyx-saas-minio-1 Stopping
+ Container onyx-saas-cache-1 Stopped
+ Container onyx-saas-cache-1 Removing
+ Container onyx-saas-cache-1 Removed
+ Container onyx-saas-relational_db-1 Stopped
+ Container onyx-saas-relational_db-1 Removing
+ Container onyx-saas-minio-1 Stopped
+ Container onyx-saas-minio-1 Removing
+ Container onyx-saas-relational_db-1 Removed
+ Container onyx-saas-minio-1 Removed
+ Container onyx-saas-opensearch-1 Stopped
+ Container onyx-saas-opensearch-1 Removing
+ Container onyx-saas-opensearch-1 Removed
+ Container onyx-saas-inference_model_server-1 Stopped
+ Container onyx-saas-inference_model_server-1 Removing
+ Container onyx-saas-inference_model_server-1 Removed
+ Network onyx-saas_default Removing
+ Network onyx-saas_default Removed
+-- step down: exit 0
+
+== step up ==
+ Network onyx-saas_default Creating
+ Network onyx-saas_default Creating
+ Network onyx-saas_default Created
+ Network onyx-saas_default Created
+ Container onyx-saas-inference_model_server-1 Creating
+ Container onyx-saas-indexing_model_server-1 Creating
+ Container onyx-saas-certbot-1 Creating
+ Container onyx-saas-cache-1 Creating
+ Container onyx-saas-relational_db-1 Creating
+ Container onyx-saas-opensearch-1 Creating
+ Container onyx-saas-minio-1 Creating
+ Container onyx-saas-opensearch-1 Created
+ Container onyx-saas-certbot-1 Created
+ Container onyx-saas-relational_db-1 Created
+ Container onyx-saas-minio-1 Created
+ Container onyx-saas-mt_minio_bucket-1 Creating
+ Container onyx-saas-inference_model_server-1 Created
+ Container onyx-saas-cache-1 Created
+ Container onyx-saas-indexing_model_server-1 Created
+ Container onyx-saas-background-1 Creating
+ Container onyx-saas-mt_minio_bucket-1 Created
+ Container onyx-saas-api_server-1 Creating
+ Container onyx-saas-background-1 Created
+ Container onyx-saas-api_server-1 Created
+ Container onyx-saas-web_server-1 Creating
+ Container onyx-saas-web_server-1 Created
+ Container onyx-saas-nginx-1 Creating
+ Container onyx-saas-nginx-1 Created
+ Container onyx-saas-inference_model_server-1 Starting
+ Container onyx-saas-cache-1 Starting
+ Container onyx-saas-opensearch-1 Starting
+ Container onyx-saas-relational_db-1 Starting
+ Container onyx-saas-certbot-1 Starting
+ Container onyx-saas-minio-1 Starting
+ Container onyx-saas-indexing_model_server-1 Starting
+ Container onyx-saas-inference_model_server-1 Started
+ Container onyx-saas-cache-1 Started
+ Container onyx-saas-opensearch-1 Started
+ Container onyx-saas-relational_db-1 Started
+ Container onyx-saas-certbot-1 Started
+ Container onyx-saas-minio-1 Started
+ Container onyx-saas-minio-1 Waiting
+ Container onyx-saas-indexing_model_server-1 Started
+ Container onyx-saas-background-1 Starting
+ Container onyx-saas-background-1 Started
+ Container onyx-saas-minio-1 Healthy
+ Container onyx-saas-mt_minio_bucket-1 Starting
+ Container onyx-saas-mt_minio_bucket-1 Started
+ Container onyx-saas-mt_minio_bucket-1 Waiting
+ Container onyx-saas-mt_minio_bucket-1 Exited
+ Container onyx-saas-api_server-1 Starting
+ Container onyx-saas-api_server-1 Started
+ Container onyx-saas-web_server-1 Starting
+ Container onyx-saas-web_server-1 Started
+ Container onyx-saas-api_server-1 Waiting
+ Container onyx-saas-web_server-1 Waiting
+ Container onyx-saas-web_server-1 Healthy
+ Container onyx-saas-api_server-1 Healthy
+ Container onyx-saas-nginx-1 Starting
+ Container onyx-saas-nginx-1 Started
+-- step up: exit 0
+
+== step health ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+-- step health: exit 0
+
+== step public-url ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+-- certificate
+issuer=C = US, O = Let's Encrypt, CN = YE1
+subject=CN = my-knowledge.duckdns.org
+notAfter=Jan  2 11:55:30 2027 GMT
+http://my-knowledge.duckdns.org/ redirects (301).
+-- step public-url: exit 0
+
+== containers after ==
+onyx-saas-api_server-1 cc54050e68fa Up 36 seconds (healthy)
+onyx-saas-background-1 7603f645ce6d Up About a minute
+onyx-saas-cache-1 b235bf042926 Up About a minute
+onyx-saas-certbot-1 6ff3045de7e6 Up About a minute
+onyx-saas-indexing_model_server-1 c1078099133d Up About a minute (healthy)
+onyx-saas-inference_model_server-1 886a2329ed1e Up About a minute (healthy)
+onyx-saas-minio-1 a60b30741628 Up About a minute (healthy)
+onyx-saas-nginx-1 d7f669f74ac9 Up Less than a second (health: starting)
+onyx-saas-opensearch-1 46c11e73673b Up About a minute
+onyx-saas-relational_db-1 bf46f41fc339 Up About a minute (healthy)
+onyx-saas-web_server-1 0122e5a3ffe3 Up 36 seconds (healthy)
+volumes: onyx-saas_api_server_logs onyx-saas_background_logs onyx-saas_db_volume onyx-saas_file-system onyx-saas_indexing_huggingface_model_cache onyx-saas_indexing_model_server_logs onyx-saas_inference_model_server_logs onyx-saas_minio_data onyx-saas_model_cache_huggingface onyx-saas_opensearch-data
+
+== step volumes-kept ==
+-- step volumes-kept: exit 0
+
+== step saas-journey-after-restart ==
+Tag: journey-cd52ca91
+model.env found: the journey checks that no response holds the platform key.
+PASS owner A keeps workspace and admin capability after restart: {"email": "owner-a-journey-cd52ca91@example.com", "team_name": "tenant_6745bfec-43c1-47d4-8205-c974fc6a631f", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS owner B keeps workspace and admin capability after restart: {"email": "owner-b-journey-cd52ca91@example.com", "team_name": "tenant_d7e0b029-d380-47e1-bd06-32d81ab060e6", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS member A is in workspace A without admin capability after restart: {"email": "member-a-journey-cd52ca91@example.com", "team_name": "tenant_6745bfec-43c1-47d4-8205-c974fc6a631f", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["basic", "generate:image", "read:chat", "read:search", "use:llm_gateway", "write:chat"]}
+PASS owner A sees '22nd X AI model' as the default model without setup after restart: {"status": 200, "names": ["22nd X AI model", "Deepseek V4P1 Flash"], "provider": "fireworks_ai", "model": "accounts/fireworks/models/deepseek-v4p1-flash"}
+PASS owner B sees '22nd X AI model' as the default model without setup after restart: {"status": 200, "names": ["22nd X AI model", "Deepseek V4P1 Flash"], "provider": "fireworks_ai", "model": "accounts/fireworks/models/deepseek-v4p1-flash"}
+PASS owner A admin provider listing masks the platform key after restart: {"status": 200, "api_key_masked": true, "key_known_to_test": true}
+PASS member A gets 403 on /api/admin/llm/provider after restart: {"status": 403, "body": {"error_code": "INSUFFICIENT_PERMISSIONS", "detail": "You do not have the required permissions for this action."}}
+PASS member A gets 403 on /api/admin/llm/provider/1 after restart: {"status": 403, "body": {"error_code": "INSUFFICIENT_PERMISSIONS", "detail": "You do not have the required permissions for this action."}}
+PASS owner A reads own chat session after restart: {"status": 200}
+PASS owner B cannot read owner A chat session after restart: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "Chat session not found"}}
+PASS member A cannot read owner A chat session after restart: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS owner A chat answers 'Reply with the single word OK' with the platform model after restart: {"chat_session_id": "e407e686-430f-41be-93b8-2b8998e962dc", "seconds": 1.7, "answer": "OK", "cited": [], "error": null}
+PASS chat Q1 as member A after restart: {"problems": [], "chat_session_id": "a1fa684b-fdf8-48b8-ba9a-a8f4245a32ab", "seconds": 27.0, "answer": "I'll look that up for you.The daily meal allowance for domestic business travel is **INR 1,500 per day** [[1]]().\n\nA few related details from the same policy, in case they're useful [[1]]():\n- International meal allowance: **USD 60 per day**\n- Hotel limit for domestic travel: **INR 6,000 per night**\n- Claims must be submitted within **30 days** of the trip, with itemised receipts attached", "cited": ["expense-policy.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS owner B search for Q3 finds its own refund-policy-2026.md after restart: {"titles": ["refund-policy-2026.md"]}
+PASS owner A search finds expense-policy.md and refund-policy-2026.md of company A after restart: {"titles": ["expense-policy.md", "hr-salary-bands-restricted.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md", "refund-policy-2025.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md", "whatsapp-assistant-product-guide.md", "hr-salary-bands-restricted.md"]}
+PASS owner A search returns no document id of company B after restart: {"shared_ids": [], "ids_a": ["2846e1ff-7f09-440a-81e7-5e603ccf4ebf", "FILE_CONNECTOR__16751855-ed06-45c7-a31d-cd657741d259", "FILE_CONNECTOR__3e7aa3b9-0d30-4718-a0ae-bb14b28d244b", "FILE_CONNECTOR__8ccf081b-6bbf-4c83-bea6-7473f6206de3", "FILE_CONNECTOR__bc3775a4-97d1-4ba3-ad09-129e926f5d04"]}
+PASS owner B search for Q1 returns no document of company A after restart: {"titles": ["refund-policy-2026.md"], "leaked_ids": []}
+PASS owner B chat Q1 says that its documents lack the information after restart: {"problems": [], "chat_session_id": "ceeb5210-2180-48e4-a21d-835bce9b55c2", "seconds": 30.9, "answer": "The documents I have access to don't cover the daily meal allowance for domestic business travel — the only policy I can find is a customer refund policy, which doesn't address travel or expense reimbursement. You may want to check with your finance or HR team for the current travel expense policy.", "cited": [], "retrieved": ["refund-policy-2026.md"], "error": null}
+PASS the platform key appears in no response: {"responses_scanned": 27, "paths_with_key": []}
+PASS step journey-after-restart: 19 checks passed
+-- step saas-journey-after-restart: exit 0
+
+== docker compose ps (onyx-saas) ==
+NAME                                 IMAGE                                                                                                                                   COMMAND                  SERVICE                  CREATED         STATUS                        PORTS
+onyx-saas-api_server-1               ghcr.io/ravi3594444/onyx1/onyx-backend:v4.8.4-axi.2@sha256:987abe7c791f3e6179555d1670632cfbd4feace13a45ef398fbcc2208cf4eaba             "/bin/sh -c 'alembic…"   api_server               2 minutes ago   Up About a minute (healthy)
+onyx-saas-background-1               ghcr.io/ravi3594444/onyx1/onyx-backend:v4.8.4-axi.2@sha256:987abe7c791f3e6179555d1670632cfbd4feace13a45ef398fbcc2208cf4eaba             "/bin/sh -c ' if [ -…"   background               2 minutes ago   Up 2 minutes
+onyx-saas-cache-1                    docker.io/library/redis:7.4-alpine                                                                                                      "docker-entrypoint.s…"   cache                    2 minutes ago   Up 2 minutes                  6379/tcp
+onyx-saas-certbot-1                  certbot/certbot:v5.8.0@sha256:f70ad0adbb7e117f0fe42a63c553f28ea451edabc0148757b6efcd9735acaa20                                          "/bin/sh -c 'trap ex…"   certbot                  2 minutes ago   Up 2 minutes                  80/tcp, 443/tcp
+onyx-saas-indexing_model_server-1    onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   indexing_model_server    2 minutes ago   Up 2 minutes (healthy)
+onyx-saas-inference_model_server-1   onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   inference_model_server   2 minutes ago   Up 2 minutes (healthy)
+onyx-saas-minio-1                    docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5   "/usr/bin/docker-ent…"   minio                    2 minutes ago   Up 2 minutes (healthy)        9000/tcp
+onyx-saas-nginx-1                    docker.io/library/nginx:1.25.5-alpine                                                                                                   "/docker-entrypoint.…"   nginx                    2 minutes ago   Up About a minute (healthy)   0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp
+onyx-saas-opensearch-1               docker.io/opensearchproject/opensearch:3.6.0                                                                                            "./opensearch-docker…"   opensearch               2 minutes ago   Up 2 minutes                  9200/tcp, 9300/tcp, 9600/tcp, 9650/tcp
+onyx-saas-relational_db-1            docker.io/library/postgres:15.2-alpine                                                                                                  "docker-entrypoint.s…"   relational_db            2 minutes ago   Up 2 minutes (healthy)        5432/tcp
+onyx-saas-web_server-1               ghcr.io/ravi3594444/onyx1/onyx-web-server:v4.8.4-axi-cloud.3@sha256:4a2762932650d5941c4c96ca6f258f91bfcc9cc3248ab8f5ea5bb147402bba79    "docker-entrypoint.s…"   web_server               2 minutes ago   Up About a minute (healthy)
+
+== docker compose images (onyx-saas) ==
+CONTAINER                            REPOSITORY                                  TAG                 PLATFORM            IMAGE ID            SIZE                CREATED
+onyx-saas-api_server-1               ghcr.io/ravi3594444/onyx1/onyx-backend      <none>              linux/amd64         987abe7c791f        2.58GB              24 minutes ago
+onyx-saas-background-1               ghcr.io/ravi3594444/onyx1/onyx-backend      <none>              linux/amd64         987abe7c791f        2.58GB              24 minutes ago
+onyx-saas-cache-1                    redis                                       7.4-alpine          linux/amd64         858f009f9709        57.3MB              2 weeks ago
+onyx-saas-certbot-1                  certbot/certbot                             <none>              linux/amd64         f70ad0adbb7e        293MB               4 weeks ago
+onyx-saas-indexing_model_server-1    onyxdotapp/onyx-model-server                <none>              linux/amd64         2acf61ff8140        13.1GB              45 hours ago
+onyx-saas-inference_model_server-1   onyxdotapp/onyx-model-server                <none>              linux/amd64         2acf61ff8140        13.1GB              45 hours ago
+onyx-saas-minio-1                    onyxdotapp/minio                            <none>              linux/amd64         7330be2e7320        246MB               14 months ago
+onyx-saas-mt_minio_bucket-1          onyxdotapp/minio                            <none>              linux/amd64         7330be2e7320        246MB               14 months ago
+onyx-saas-nginx-1                    nginx                                       1.25.5-alpine       linux/amd64         516475cc129d        74.1MB              2 years ago
+onyx-saas-opensearch-1               opensearchproject/opensearch                3.6.0               linux/amd64         b5dd1512af2a        2.77GB              4 months ago
+onyx-saas-relational_db-1            postgres                                    15.2-alpine         linux/amd64         d9c304353c03        347MB               3 years ago
+onyx-saas-web_server-1               ghcr.io/ravi3594444/onyx1/onyx-web-server   <none>              linux/amd64         4a2762932650        451MB               About an hour ago
+
+== volumes of onyx and onyx-saas ==
+DRIVER    VOLUME NAME
+local     onyx_api_server_logs
+local     onyx_background_logs
+local     onyx_db_volume
+local     onyx_file-system
+local     onyx_indexing_huggingface_model_cache
+local     onyx_indexing_model_server_logs
+local     onyx_inference_model_server_logs
+local     onyx_minio_data
+local     onyx_model_cache_huggingface
+local     onyx_opensearch-data
+onyx-saas_api_server_logs
+onyx-saas_background_logs
+onyx-saas_db_volume
+onyx-saas_file-system
+onyx-saas_indexing_huggingface_model_cache
+onyx-saas_indexing_model_server_logs
+onyx-saas_inference_model_server_logs
+onyx-saas_minio_data
+onyx-saas_model_cache_huggingface
+onyx-saas_opensearch-data
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989        7022        1952          28        7014        8399
+Swap:              0           0           0
+
+== summary ==
+step             exit code
+down             0
+up               0
+health           0
+public-url       0
+volumes-kept     0
+saas-journey-after-restart 0
+RESULT: PASS (all steps exited with 0)
