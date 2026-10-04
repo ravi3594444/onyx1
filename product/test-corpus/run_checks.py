@@ -347,6 +347,39 @@ def poll(
         time.sleep(5)
 
 
+def last_pruned(admin: OnyxSession, cc_pair_id: int) -> str | None:
+    status, value = admin.request(
+        "GET", f"/api/manage/admin/cc-pair/{cc_pair_id}/last_pruned"
+    )
+    expect(status == 200, f"last_pruned returned {status}: {value}")
+    return value if isinstance(value, str) else None
+
+
+def wait_for_prune(
+    checks: Checks, admin: OnyxSession, cc_pair_id: int, before: str | None, name: str
+) -> None:
+    """Waits until a prune newer than `before` finished.
+
+    Onyx v4.8.4 starts no prune for removed files while another prune of the same
+    cc-pair runs, and still answers 200. A removed file then stays searchable until
+    the next scheduled prune. So a later removal must wait for the earlier prune.
+    """
+    value, seconds = poll(
+        lambda: last_pruned(admin, cc_pair_id),
+        lambda found: found is not None and found != before,
+    )
+    checks.record(
+        name,
+        seconds is not None,
+        {
+            "seconds": seconds,
+            "timeout_seconds": WAIT_SECONDS,
+            "before": before,
+            "last_pruned": value,
+        },
+    )
+
+
 def latest_attempt(admin: OnyxSession, cc_pair_id: int) -> tuple[int, str | None]:
     """Returns the id and the status of the newest index attempt (0 if none)."""
     status, page = admin.request(
@@ -800,6 +833,7 @@ def step_update(base_url: str, state: dict[str, Any], checks: Checks) -> None:
     temp_file = Path(tempfile.mkdtemp()) / GUIDE_FILE
     temp_file.write_text(updated)
     previous_attempt_id, _ = latest_attempt(admin, state["cc_pair_id"])
+    pruned_before = last_pruned(admin, state["cc_pair_id"])
     started = time.time()
     admin.upload(
         f"/api/manage/admin/connector/{state['connector_id']}/files/update",
@@ -808,6 +842,13 @@ def step_update(base_url: str, state: dict[str, Any], checks: Checks) -> None:
     )
     wait_for_indexing(
         checks, admin, state["cc_pair_id"], len(PUBLIC_FILES), previous_attempt_id
+    )
+    wait_for_prune(
+        checks,
+        admin,
+        state["cc_pair_id"],
+        pruned_before,
+        "prune after the update removes the old version",
     )
     log("update applied", {"seconds": round(time.time() - started, 1)})
     contents = search_contents(admin, QUESTIONS["Q2"])

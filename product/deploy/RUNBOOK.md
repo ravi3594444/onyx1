@@ -112,6 +112,22 @@ The script uploads `product/branding/logo.png` and replaces all enterprise setti
 - Redis has no volume. A Redis restart signs out all users. They sign in again; no data is lost.
 - Any change to `.env` recreates every service that reads it, which includes Redis.
 
+## 7a. Known Onyx behaviour: removed files and pruning
+
+When you remove files from a File connector, Onyx starts a prune for that connector. In
+v4.8.4, if a prune of the same connector still runs, Onyx starts no new prune. It only logs
+"Failed to trigger pruning" and the API still answers 200. The removed file then stays
+searchable until the next scheduled prune (default every 7 days).
+
+After you remove or replace files:
+
+1. Wait until **Last pruned** of the connector changes
+   (`GET /api/manage/admin/cc-pair/<id>/last_pruned`).
+2. If you removed more files during a running prune, start a prune again
+   (`POST /api/manage/admin/cc-pair/<id>/prune`), or wait for the schedule.
+
+`run_checks.py` waits for the prune after the update step. CI found this race on a fast runner.
+
 ## 8. Backup and restore
 
 The backup is cold: the stack stops for the copy.
