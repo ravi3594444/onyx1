@@ -195,12 +195,20 @@ We added two workflows. The 50 upstream workflows stay unchanged.
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| `axi-product-ci.yml` ("22nd X AI product checks") | Pull requests, and pushes to `main` and `claude/**`, that change `product/`, `docs/product/` or `axi-*.yml`; manual run | `static`: pre-commit hooks on our files (large files, YAML, `ripsecrets`, `shellcheck`, `ruff`, `ruff-format`, `actionlint`, `zizmor`), `py_compile`, `bash -n`. `compose-config`: exports the tag from `release.env`, checks its commit, runs `make-env.sh`, checks the services and the image digests. `e2e` (push to `main` or manual run): starts the stack, registers 3 users, runs the `index` and `search` checks, backs up, restores into `onyx-restore` on port 3100 and searches there. |
+| `axi-product-ci.yml` ("22nd X AI product checks") | Pull requests, and pushes to `main` and `claude/**`, that change `product/`, `docs/product/` or `axi-*.yml`; manual run | `static`: pre-commit hooks on our files (large files, YAML, `ripsecrets`, `shellcheck`, `ruff`, `ruff-format`, `actionlint`, `zizmor`), `py_compile`, `bash -n`. `compose-config`: exports the tag from `release.env`, checks its commit, runs `make-env.sh`, checks the services and the image digests. `e2e` (push to `main` or manual run): starts the stack, registers 3 users, runs `index`, `search`, `privacy`, `update` and `delete` with `--skip-chat`, backs up, restores into `onyx-restore` on port 3100, and runs `search` there. |
 | `axi-deploy-dev.yml` ("Deploy 22nd X AI dev") | The product checks pass on a push to `main`; manual run from `main` | A manual run first checks that the product checks passed on `main` for that commit. Then it runs `product/deploy/deploy-remote.sh` on the VM over SSH. One deploy at a time. |
 
-CI has no model provider. Thus `e2e` does not run `chat`, `privacy`, `update` and `delete`,
-because these steps use the chat API. Run them on the VM as section 9 shows.
-To run the static checks locally: `uvx pre-commit run --files $(git ls-files docs/product product)`.
+CI has no model provider. Thus `e2e` does not run `chat` and `chat-forced`, and it skips the
+model answers in `update` and `delete` (the log shows them as `SKIP`). Run the chat checks on the
+VM as section 9 shows.
+To run the static checks locally, the same files as CI:
+
+```bash
+env -u GH_TOKEN -u GITHUB_TOKEN uvx pre-commit run \
+  --files $(git ls-files docs/product product '.github/workflows/axi-*.yml')
+```
+
+Without a token, zizmor skips its online audits. In CI it gets the job token.
 
 Deploy secrets. The SSH key gives `docker` access, which is equal to root on the VM.
 Thus keep the secrets only in the environment `development`, never in the repository:
@@ -240,21 +248,24 @@ The script stops in two more cases:
   database, and only a backup from before the upgrade can undo that. Run `backup.sh` on the VM,
   then start a manual deploy with **allow_release_change** selected.
 
-To start the pipeline:
+Status on 4 October 2026: the owner enabled Actions on the fork. The product checks ran on
+this branch (runs #1 to #3). Enabling Actions also enabled the upstream workflows. On the next
+push to `main`, "Storybook Deploy" failed because it needs Onyx's Vercel token, and other
+upstream workflows started.
 
-1. Merge the workflows to `main`. GitHub shows the manual run button and starts the deploy
-   trigger only for workflow files on the default branch.
-2. The owner enables Actions in the fork's **Actions** tab. This also enables all upstream
-   workflows. Many of them need Onyx's private secrets or self-hosted runners, and some
-   publish images and releases.
-3. Disable the upstream workflows at once:
+Next steps:
+
+1. Disable the upstream workflows now, before the next push to `main`. GitHub lists a workflow
+   only after it ran once, so repeat the loop later, or use **Actions > workflow > Disable**:
 
    ```bash
    for file in $(git ls-files '.github/workflows/*.yml' | grep -v '/axi-'); do
-     gh workflow disable "$(basename "${file}")" --repo ravi3594444/onyx1
+     gh workflow disable "$(basename "${file}")" --repo ravi3594444/onyx1 || true
    done
    gh workflow list --all --repo ravi3594444/onyx1
    ```
 
-4. When the VM exists, create the environment `development` and add the deploy secrets as
+2. Merge the workflows to `main`. GitHub starts the deploy trigger only for workflow files on
+   the default branch.
+3. When the VM exists, create the environment `development` and add the deploy secrets as
    shown above.
