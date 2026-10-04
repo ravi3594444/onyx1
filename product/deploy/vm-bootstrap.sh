@@ -1581,7 +1581,7 @@ cutover() {
     die "The live stack did not come back after the backup. Start it: cd ${COMPOSE_DIR} && docker compose start"
 
   saas_prepare "${sha}"
-  saas_copy_https_files
+  saas_copy_https_files "${sha}"
   section "docker compose -p ${SAAS_PROJECT} pull"
   saas_compose pull --quiet
 
@@ -1680,6 +1680,7 @@ saas_merge_secrets() {
 # Copies the Let's Encrypt files and the nginx redirect files of the live stack. The copies
 # keep their owner (certbot writes as root). An existing certbot/conf copy stays as it is.
 saas_copy_https_files() {
+  local sha="$1"
   section "certificate and nginx files"
   mkdir -p "${SAAS_DATA_DIR}/certbot" "${SAAS_DATA_DIR}/nginx-extra"
   if [[ -d "${SAAS_DATA_DIR}/certbot/conf" ]]; then
@@ -1692,7 +1693,11 @@ saas_copy_https_files() {
   # redirect.conf.template already carries the domain. render-redirect.sh fills in the rest.
   sudo -n cp -a "${LIVE_DATA_DIR}/nginx-extra/." "${SAAS_DATA_DIR}/nginx-extra/" ||
     die "sudo -n cannot copy ${LIVE_DATA_DIR}/nginx-extra."
-  echo "Copied nginx-extra/."
+  # The live copy of render-redirect.sh may predate the leave-team guard. Use the checkout.
+  sudo -n install -m 644 "${ONYX_SRC_DIR}/product/deploy/nginx/render-redirect.sh" \
+    "${SAAS_DATA_DIR}/nginx-extra/render-redirect.sh" ||
+    die "sudo -n cannot write ${SAAS_DATA_DIR}/nginx-extra/render-redirect.sh."
+  echo "Copied nginx-extra/ and installed render-redirect.sh from ${sha}."
   ls -la "${SAAS_DATA_DIR}/nginx-extra"
 }
 
