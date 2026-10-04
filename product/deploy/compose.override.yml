@@ -1,0 +1,9 @@
+# 22nd X AI overlay for the Onyx v4.8.4 Docker Compose deployment.
+# Copy this file next to the docker-compose.yml that onyx-cli writes.
+# onyx-cli and docker compose apply it last. See product/deploy/RUNBOOK.md.
+services:
+  code-interpreter:
+    # Optional Python sandbox. It mounts the host Docker socket, which gives it
+    # root-equivalent access to the host. The PRD does not need it.
+    # To enable it, add "code-interpreter" to COMPOSE_PROFILES in .env.
+    profiles: ["code-interpreter"]

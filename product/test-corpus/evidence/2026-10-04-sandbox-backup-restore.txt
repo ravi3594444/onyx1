@@ -1,0 +1,257 @@
+# Live backup/restore tests, sandbox, 2026-10-04T10:14:57Z, commit 0525118, uncommitted product files (evidence excluded): 0
+
+## T1 backup with a failing copy (BACKUP_TOOL_IMAGE=missing image)
+ Container onyx-background-1 Stopping 
+ Container onyx-llm-1 Stopping 
+ Container onyx-nginx-1 Stopping 
+ Container onyx-llm-1 Stopped 
+ Container onyx-nginx-1 Stopped 
+ Container onyx-web_server-1 Stopping 
+ Container onyx-background-1 Stopped 
+ Container onyx-indexing_model_server-1 Stopping 
+ Container onyx-web_server-1 Stopped 
+ Container onyx-api_server-1 Stopping 
+ Container onyx-indexing_model_server-1 Stopped 
+ Container onyx-api_server-1 Stopped 
+ Container onyx-opensearch-1 Stopping 
+ Container onyx-cache-1 Stopping 
+ Container onyx-minio-1 Stopping 
+ Container onyx-inference_model_server-1 Stopping 
+ Container onyx-relational_db-1 Stopping 
+ Container onyx-relational_db-1 Stopped 
+ Container onyx-minio-1 Stopped 
+ Container onyx-cache-1 Stopped 
+ Container onyx-opensearch-1 Stopped 
+ Container onyx-inference_model_server-1 Stopped 
+Unable to find image 'onyx-backup-test-missing-image:none' locally
+docker: Error response from daemon: pull access denied for onyx-backup-test-missing-image, repository does not exist or may require 'docker login'
+
+Run 'docker run --help' for more information
+Backup failed. Starting the stack again.
+ Container onyx-cache-1 Starting 
+ Container onyx-opensearch-1 Starting 
+ Container onyx-inference_model_server-1 Starting 
+ Container onyx-relational_db-1 Starting 
+ Container onyx-indexing_model_server-1 Starting 
+ Container onyx-minio-1 Starting 
+ Container onyx-llm-1 Starting 
+ Container onyx-minio-1 Started 
+ Container onyx-opensearch-1 Started 
+ Container onyx-inference_model_server-1 Started 
+ Container onyx-llm-1 Started 
+ Container onyx-indexing_model_server-1 Started 
+ Container onyx-relational_db-1 Started 
+ Container onyx-cache-1 Started 
+ Container onyx-api_server-1 Starting 
+ Container onyx-background-1 Starting 
+ Container onyx-background-1 Started 
+ Container onyx-api_server-1 Started 
+ Container onyx-web_server-1 Starting 
+ Container onyx-web_server-1 Started 
+ Container onyx-web_server-1 Waiting 
+ Container onyx-api_server-1 Waiting 
+ Container onyx-web_server-1 Healthy 
+ Container onyx-api_server-1 Healthy 
+ Container onyx-nginx-1 Starting 
+ Container onyx-nginx-1 Started 
+ERROR: backup failed. /tmp/claude-0/-home-user-onyx1/52f48be2-6eed-5e13-a404-7836a3f350b4/scratchpad/backups/run-1791108897/t1 was not written.
+exit code: 1
+backup folder exists after failure: no; partial folders left: 0
+live containers running: 11; live health: 200
+
+## T2 backup success
+ Container onyx-llm-1 Stopping 
+ Container onyx-nginx-1 Stopping 
+ Container onyx-background-1 Stopping 
+ Container onyx-llm-1 Stopped 
+ Container onyx-nginx-1 Stopped 
+ Container onyx-web_server-1 Stopping 
+ Container onyx-background-1 Stopped 
+ Container onyx-indexing_model_server-1 Stopping 
+ Container onyx-web_server-1 Stopped 
+ Container onyx-api_server-1 Stopping 
+ Container onyx-indexing_model_server-1 Stopped 
+ Container onyx-api_server-1 Stopped 
+ Container onyx-relational_db-1 Stopping 
+ Container onyx-cache-1 Stopping 
+ Container onyx-inference_model_server-1 Stopping 
+ Container onyx-opensearch-1 Stopping 
+ Container onyx-minio-1 Stopping 
+ Container onyx-cache-1 Stopped 
+ Container onyx-relational_db-1 Stopped 
+ Container onyx-minio-1 Stopped 
+ Container onyx-opensearch-1 Stopped 
+ Container onyx-inference_model_server-1 Stopped 
+ Container onyx-llm-1 Starting 
+ Container onyx-minio-1 Starting 
+ Container onyx-cache-1 Starting 
+ Container onyx-relational_db-1 Starting 
+ Container onyx-inference_model_server-1 Starting 
+ Container onyx-opensearch-1 Starting 
+ Container onyx-indexing_model_server-1 Starting 
+ Container onyx-llm-1 Started 
+ Container onyx-relational_db-1 Started 
+ Container onyx-opensearch-1 Started 
+ Container onyx-inference_model_server-1 Started 
+ Container onyx-cache-1 Started 
+ Container onyx-indexing_model_server-1 Started 
+ Container onyx-background-1 Starting 
+ Container onyx-minio-1 Started 
+ Container onyx-api_server-1 Starting 
+ Container onyx-background-1 Started 
+ Container onyx-api_server-1 Started 
+ Container onyx-web_server-1 Starting 
+ Container onyx-web_server-1 Started 
+ Container onyx-web_server-1 Waiting 
+ Container onyx-api_server-1 Waiting 
+ Container onyx-web_server-1 Healthy 
+ Container onyx-api_server-1 Healthy 
+ Container onyx-nginx-1 Starting 
+ Container onyx-nginx-1 Started 
+Backup in /tmp/claude-0/-home-user-onyx1/52f48be2-6eed-5e13-a404-7836a3f350b4/scratchpad/backups/run-1791108897/t2. Downtime: 86 s.
+exit code: 0
+drwx------ 2 root root    4096 Oct  4 10:17 .
+drwx------ 3 root root    4096 Oct  4 10:17 ..
+-rw------- 1 root root     426 Oct  4 10:17 SHA256SUMS
+-rw------- 1 root root 7764370 Oct  4 10:16 db_volume.tar.gz
+-rw------- 1 root root   19242 Oct  4 10:16 env.backup
+-rw------- 1 root root      87 Oct  4 10:16 file-system.tar.gz
+-rw------- 1 root root   12583 Oct  4 10:16 minio_data.tar.gz
+-rw------- 1 root root  680759 Oct  4 10:16 opensearch-data.tar.gz
+live containers running: 11; live health: 200
+
+## T3 restore into the live project 'onyx' (must refuse before any change)
+./db_volume.tar.gz: OK
+./file-system.tar.gz: OK
+./minio_data.tar.gz: OK
+./opensearch-data.tar.gz: OK
+env.backup: OK
+ERROR: Project onyx has containers. Use a new project name.
+exit code: 1
+live db volume unchanged: yes; live health: 200
+
+## T4 restore with a .env that differs from env.backup (must refuse)
+./db_volume.tar.gz: OK
+./file-system.tar.gz: OK
+./minio_data.tar.gz: OK
+./opensearch-data.tar.gz: OK
+env.backup: OK
+ERROR: /tmp/claude-0/-home-user-onyx1/52f48be2-6eed-5e13-a404-7836a3f350b4/scratchpad/restore-t4/deployment/docker_compose/.env differs from env.backup. Use a compose folder without .env.
+exit code: 1
+onyx-t4 volumes created: 0
+
+## T5 restore from a backup whose MinIO root password does not match S3_AWS_SECRET_ACCESS_KEY (must refuse, no .env written)
+./db_volume.tar.gz: OK
+./file-system.tar.gz: OK
+./minio_data.tar.gz: OK
+./opensearch-data.tar.gz: OK
+env.backup: OK
+ERROR: MINIO_ROOT_PASSWORD is not equal to S3_AWS_SECRET_ACCESS_KEY in env.backup.
+exit code: 1
+.env written: no; onyx-t5 volumes: 0
+
+## T6 restore with an exported secret in the shell environment (must refuse)
+ERROR: The shell sets POSTGRES_PASSWORD. Compose uses them, not env.backup. Run: unset POSTGRES_PASSWORD
+exit code: 1
+onyx-t6 volumes: 0
+
+## T7 isolated restore into project onyx-restore on port 3100 (live stack stopped)
+ Container onyx-inference_model_server-1 Stopped 
+./db_volume.tar.gz: OK
+./file-system.tar.gz: OK
+./minio_data.tar.gz: OK
+./opensearch-data.tar.gz: OK
+env.backup: OK
+ Network onyx-restore_default Creating 
+ Network onyx-restore_default Created 
+ Volume onyx-restore_indexing_model_server_logs Creating 
+ Volume onyx-restore_indexing_model_server_logs Created 
+ Volume onyx-restore_api_server_logs Creating 
+ Volume onyx-restore_api_server_logs Created 
+ Volume onyx-restore_inference_model_server_logs Creating 
+ Volume onyx-restore_inference_model_server_logs Created 
+ Volume onyx-restore_file-system Creating 
+ Volume onyx-restore_file-system Created 
+ Volume onyx-restore_db_volume Creating 
+ Volume onyx-restore_db_volume Created 
+ Volume onyx-restore_model_cache_huggingface Creating 
+ Volume onyx-restore_model_cache_huggingface Created 
+ Volume onyx-restore_minio_data Creating 
+ Volume onyx-restore_minio_data Created 
+ Volume onyx-restore_background_logs Creating 
+ Volume onyx-restore_background_logs Created 
+ Volume onyx-restore_opensearch-data Creating 
+ Volume onyx-restore_opensearch-data Created 
+ Volume onyx-restore_indexing_huggingface_model_cache Creating 
+ Volume onyx-restore_indexing_huggingface_model_cache Created 
+ Container onyx-restore-opensearch-1 Creating 
+ Container onyx-restore-minio-1 Creating 
+ Container onyx-restore-relational_db-1 Creating 
+ Container onyx-restore-cache-1 Creating 
+ Container onyx-restore-inference_model_server-1 Creating 
+ Container onyx-restore-llm-1 Creating 
+ Container onyx-restore-indexing_model_server-1 Creating 
+ Container onyx-restore-opensearch-1 Created 
+ Container onyx-restore-minio-1 Created 
+ Container onyx-restore-relational_db-1 Created 
+ Container onyx-restore-llm-1 Created 
+ Container onyx-restore-indexing_model_server-1 Created 
+ Container onyx-restore-inference_model_server-1 Created 
+ Container onyx-restore-cache-1 Created 
+ Container onyx-restore-api_server-1 Creating 
+ Container onyx-restore-background-1 Creating 
+ Container onyx-restore-background-1 Created 
+ Container onyx-restore-api_server-1 Created 
+ Container onyx-restore-web_server-1 Creating 
+ Container onyx-restore-web_server-1 Created 
+ Container onyx-restore-nginx-1 Creating 
+ Container onyx-restore-nginx-1 Created 
+ Container onyx-restore-minio-1 Starting 
+ Container onyx-restore-cache-1 Starting 
+ Container onyx-restore-opensearch-1 Starting 
+ Container onyx-restore-inference_model_server-1 Starting 
+ Container onyx-restore-relational_db-1 Starting 
+ Container onyx-restore-opensearch-1 Started 
+ Container onyx-restore-relational_db-1 Started 
+ Container onyx-restore-inference_model_server-1 Started 
+ Container onyx-restore-cache-1 Started 
+ Container onyx-restore-minio-1 Started 
+ Container onyx-restore-api_server-1 Starting 
+ Container onyx-restore-api_server-1 Started 
+ Container onyx-restore-web_server-1 Starting 
+ Container onyx-restore-web_server-1 Started 
+ Container onyx-restore-api_server-1 Waiting 
+ Container onyx-restore-web_server-1 Waiting 
+ Container onyx-restore-web_server-1 Healthy 
+ Container onyx-restore-api_server-1 Healthy 
+ Container onyx-restore-nginx-1 Starting 
+ Container onyx-restore-nginx-1 Started 
+Restored into project onyx-restore. http://localhost:3100/api/health answers 200.
+The background service is not started. Disable the connectors and the bots before you start it.
+exit code: 0; seconds: 51
+background service running in restore copy: 0
+PASS search Q1 as alice@example.com: {"expected_top": "expense-policy.md", "seconds": 17.19, "top_titles": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q2 as alice@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.3, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "expense-policy.md"]}
+PASS search Q3 as alice@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.3, "top_titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q4 as alice@example.com: {"expected_top": null, "seconds": 0.23, "top_titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q5 as alice@example.com: {"expected_top": null, "seconds": 0.31, "top_titles": ["expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner bob@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from alice@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from owner-admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+run_checks search on restore copy, exit code: 0
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 1, "name": "HR private", "description": null, "created_at": "2026-10-04T05:30:05.220952Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": [{"id": "785a9bca-ac37-4b54-95b1-7c99d260efdf", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T05:41:39.626273+00:00", "time_updated": "2026-10-04T05:41:39.626273+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}, {"id": 2, "name": "HR private", "description": null, "created_at": "2026-10-04T08:17:39.528985Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": [{"id": "59dd7f43-d739-40f5-adad-a687f1c9e66d", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T08:26:31.955025+00:00", "time_updated": "2026-10-04T08:26:31.955025+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}, {"id": 3, "name": "HR private", "description": null, "created_at": "2026-10-04T08:31:39.448108Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": []}, {"id": 4, "name": "HR private", "description": null, "created_at": "2026-10-04T09:48:36.187391Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": [{"id": "42da64a1-06ef-4f1c-a48e-5d3d8ea1be0f", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T09:59:37.395215+00:00", "time_updated": "2026-10-04T09:59:37.395215+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}, {"id": 5, "name": "HR private", "description": null, "created_at": "2026-10-04T10:08:50.999263Z", "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "instructions": null, "chat_sessions": []}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "c2832587-ab92-47bc-a28e-b9dadf389864", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "520f9d3e-1972-4c6a-b130-cf10a9e249bf", "file_id": "5a311123-6a51-4e56-8c5a-ffcb2fccfd4e", "created_at": "2026-10-04T10:08:51.082335", "status": "COMPLETED", "last_accessed_at": "2026-10-04T10:08:51.081614Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 103, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file c2832587-ab92-47bc-a28e-b9dadf389864: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+run_checks privacy on restore copy, exit code: 0
+ Volume onyx-restore_indexing_huggingface_model_cache Removed 
+restore copy removed; remaining onyx-restore volumes: 0
+ Container onyx-nginx-1 Started 
+live stack started again; health: 200
+
+# Finished 2026-10-04T10:20:56Z

@@ -1,0 +1,10 @@
+# prune_race.py against the sandbox stack (Onyx v4.8.4), commit b5c1e7d, 2026-10-04 11:40Z
+PASS new index attempt on cc-pair 10 indexes 4 documents: {"seconds": 20.5, "timeout_seconds": 900, "attempt_id": 16, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS all documents of the new connector are in search: {"found": ["FILE_CONNECTOR__01349b24-c135-4228-bc5a-c98999f3467e", "FILE_CONNECTOR__13eab03f-6990-47c0-93ec-8299099b0022", "FILE_CONNECTOR__8074c51e-4746-4d06-8234-39e9448f57a2", "FILE_CONNECTOR__f1f424a3-9628-498e-bd5f-ec9baa204ab8"]}
+removal of whatsapp-assistant-product-guide.md during a prune: {"second_prune_started": false, "still_in_search_after_settle": true, "settle_seconds": 60}
+PASS race reproduced: a file removed during a prune stays in search: {"file": "whatsapp-assistant-product-guide.md", "note": "FAIL means the race did not occur in this run"}
+PASS manual prune accepted: {"status": 200, "body": {"success": true, "message": "Successfully created the pruning task.", "data": null}}
+PASS manual prune finished: {"last_pruned": "2026-10-04T11:42:48.378462Z"}
+PASS manual prune removes whatsapp-assistant-product-guide.md from search: {"seconds": 0.1, "remaining": ["FILE_CONNECTOR__01349b24-c135-4228-bc5a-c98999f3467e", "FILE_CONNECTOR__13eab03f-6990-47c0-93ec-8299099b0022", "FILE_CONNECTOR__f1f424a3-9628-498e-bd5f-ec9baa204ab8"]}
+PASS step prune-race: 6 checks passed
+EXIT=0

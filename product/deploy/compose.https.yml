@@ -1,0 +1,43 @@
+# 22nd X AI HTTPS overlay for the Onyx v4.8.4 Docker Compose deployment.
+# enable-https.sh copies this file next to docker-compose.yml and adds it to
+# COMPOSE_FILE in .env: COMPOSE_FILE=docker-compose.yml:compose.override.yml:compose.https.yml
+# It gives nginx the upstream production setup (docker-compose.prod.yml, tag v4.8.4):
+# ports 80 and 443, the Let's Encrypt volumes and app.conf.template.prod.
+# The publish of HOST_PORT (3000) is removed. The app answers only on ports 80 and 443.
+# See product/deploy/RUNBOOK.md, section 3a.
+services:
+  nginx:
+    environment:
+      # app.conf.template.prod loads /etc/letsencrypt/live/${DOMAIN}/fullchain.pem.
+      - DOMAIN=${DOMAIN:?set DOMAIN in .env, or run product/deploy/enable-https.sh}
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../data/certbot/conf:/etc/letsencrypt
+      - ../data/certbot/www:/var/www/certbot
+      # Rendered by enable-https.sh from product/deploy/nginx/redirect.conf.template.
+      - ../data/nginx-extra/redirect.conf:/etc/nginx/conf.d/zz-redirect.conf:ro
+    # Same command as upstream, with the production template.
+    command: >
+      /bin/sh -c "rm -f /etc/nginx/conf.d/default.conf
+      && cp -a /nginx-templates/. /etc/nginx/conf.d/
+      && sed 's/\r$//' /etc/nginx/conf.d/run-nginx.sh > /tmp/run-nginx.sh
+      && chmod +x /tmp/run-nginx.sh
+      && /tmp/run-nginx.sh app.conf.template.prod"
+
+  # Renews the certificate every 12 hours (upstream docker-compose.prod.yml).
+  # run-nginx.sh reloads nginx every 6 hours, so nginx picks up a new certificate.
+  # Image pinned on 2026-10-04: certbot/certbot:v5.8.0, manifest list digest for all platforms.
+  certbot:
+    image: certbot/certbot:v5.8.0@sha256:f70ad0adbb7e117f0fe42a63c553f28ea451edabc0148757b6efcd9735acaa20
+    restart: unless-stopped
+    volumes:
+      - ../data/certbot/conf:/etc/letsencrypt
+      - ../data/certbot/www:/var/www/certbot
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"

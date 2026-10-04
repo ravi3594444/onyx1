@@ -1,0 +1,131 @@
+name: Bootstrap dev VM
+# Runs product/deploy/vm-bootstrap.sh on the development VM over SSH.
+# inspect: read-only report. install: Docker, host settings, release files, stack start.
+# verify: functional checks, backup, isolated restore. See product/deploy/RUNBOOK.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Action on the VM
+        type: choice
+        required: true
+        default: inspect
+        options:
+          - inspect
+          - install
+          - verify
+          - verify-with-chat
+      web_domain:
+        description: Public URL of the stack (install only, for a new .env)
+        type: string
+        default: http://my-knowledge.duckdns.org
+
+permissions:
+  contents: read
+
+# One VM operation at a time. A queued run waits and is not cancelled.
+concurrency:
+  group: bootstrap-dev
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  bootstrap:
+    name: ${{ inputs.action }} on the development VM
+    if: github.ref == 'refs/heads/main' && github.repository == 'ravi3594444/onyx1'
+    runs-on: ubuntu-latest
+    # verify: checks, backup, restore and two health waits of up to 15 minutes each.
+    timeout-minutes: 90
+    environment: ci-protected
+    permissions:
+      contents: read
+    env:
+      BOOTSTRAP_ACTION: ${{ inputs.action }}
+      WEB_DOMAIN: ${{ inputs.web_domain }}
+    steps:
+      - name: Check the deploy secrets
+        env:
+          DEV_SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          DEV_SSH_USER: ${{ secrets.DEV_SSH_USER }}
+          DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+          DEV_SSH_KNOWN_HOSTS: ${{ secrets.DEV_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for name in DEV_SSH_HOST DEV_SSH_USER DEV_SSH_KEY DEV_SSH_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing secret ${name} in ci-protected. See RUNBOOK.md, section 11."
+              exit 1
+            fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Run vm-bootstrap.sh over SSH
+        env:
+          DEV_SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          DEV_SSH_USER: ${{ secrets.DEV_SSH_USER }}
+          DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+          DEV_SSH_KNOWN_HOSTS: ${{ secrets.DEV_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          case "${BOOTSTRAP_ACTION}" in
+            inspect) args="inspect" ;;
+            install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+            verify) args="verify ${GITHUB_SHA}" ;;
+            verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+            *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+          esac
+          if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+            echo "::error::GITHUB_SHA or web_domain is not valid."
+            exit 1
+          fi
+          ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+          trap 'rm -rf "${ssh_dir}"' EXIT
+          chmod 700 "${ssh_dir}"
+          umask 077
+          printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+          printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+          log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+          # pipefail: the job fails when the script on the VM fails, not only when tee fails.
+          ssh -F /dev/null -i "${ssh_dir}/key" \
+            -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o PreferredAuthentications=publickey \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+            -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+            "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+          {
+            echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+            echo
+            echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+            echo
+            echo '```'
+            tail -n 40 "${log}"
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
+      - name: Write the summary after a failure
+        if: failure()
+        run: |
+          log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+          {
+            echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION} failed"
+            echo
+            echo "Commit: \`${GITHUB_SHA}\`. See the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+            echo
+            echo '```'
+            tail -n 60 "${log}" 2>/dev/null || echo "no log"
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bootstrap-${{ inputs.action }}-log
+          path: ${{ runner.temp }}/bootstrap-*.log
+          if-no-files-found: ignore
+          retention-days: 30
