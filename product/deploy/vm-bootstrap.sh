@@ -11,8 +11,14 @@
 #        vm-bootstrap.sh keygen
 #        vm-bootstrap.sh mt-up <full commit SHA> | mt-check <full commit SHA> [after-restart]
 #        vm-bootstrap.sh mt-restart <full commit SHA> | mt-down | mt-destroy
+#        vm-bootstrap.sh inventory <full commit SHA>
+#        vm-bootstrap.sh cutover <full commit SHA> <letsencrypt email> | rollback <full commit SHA>
+#        vm-bootstrap.sh saas-check <full commit SHA> [after-restart] | saas-restart <full commit SHA>
+#        vm-bootstrap.sh saas-down <full commit SHA>
+#        vm-bootstrap.sh assistant-prompt <full commit SHA> <set|reset|show> | chat-check <full commit SHA>
 # Layout on the VM: /srv/onyx-src (clone of the fork), /srv/onyx (release files, .env,
-# evidence), /srv/backups, /srv/onyx-mt (multi-tenant test stack). See product/deploy/RUNBOOK.md.
+# evidence), /srv/backups, /srv/onyx-mt (multi-tenant test stack), /srv/onyx-saas (multi-tenant
+# production stack after the cutover). See product/deploy/RUNBOOK.md and docs/product/MULTI-TENANT.md.
 # The script never creates a second .env for the live stack, never removes the live volumes
 # and never prints a secret. It needs python3 and curl; both are present on Debian and Ubuntu.
 set -euo pipefail
@@ -73,7 +79,15 @@ main() {
     mt-restart) mt_restart_wrapper "$@" ;;
     mt-down) mt_down_wrapper "$@" ;;
     mt-destroy) mt_destroy_wrapper "$@" ;;
-    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha> | keygen | mt-up <sha> | mt-check <sha> [after-restart] | mt-restart <sha> | mt-down | mt-destroy" ;;
+    inventory) inventory_wrapper "$@" ;;
+    cutover) cutover_wrapper "$@" ;;
+    rollback) rollback_wrapper "$@" ;;
+    saas-check) saas_check_wrapper "$@" ;;
+    saas-restart) saas_restart_wrapper "$@" ;;
+    saas-down) saas_down_wrapper "$@" ;;
+    assistant-prompt) assistant_prompt_wrapper "$@" ;;
+    chat-check) chat_check_wrapper "$@" ;;
+    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha> | keygen | mt-up <sha> | mt-check <sha> [after-restart] | mt-restart <sha> | mt-down | mt-destroy | inventory <sha> | cutover <sha> <email> | rollback <sha> | saas-check <sha> [after-restart] | saas-restart <sha> | saas-down <sha> | assistant-prompt <sha> <set|reset|show> | chat-check <sha>" ;;
   esac
 }
 
@@ -366,6 +380,13 @@ export_release_files() {
   git -C "${ONYX_SRC_DIR}" archive "${tag}" deployment/docker_compose deployment/data | tar -x -C "${target}"
   git -C "${ONYX_SRC_DIR}" show "${sha}:product/deploy/compose.override.yml" >"${compose_dir}/compose.override.yml"
   echo "Exported ${tag} (${commit}) and compose.override.yml."
+}
+
+# Copies one compose overlay from the checkout at <sha> into <compose dir>.
+export_overlay() {
+  local sha="$1" path="$2" compose_dir="$3"
+  git -C "${ONYX_SRC_DIR}" show "${sha}:${path}" >"${compose_dir}/$(basename "${path}")"
+  echo "Exported $(basename "${path}")."
 }
 
 # Reads a key from the live .env, or prints the default.
@@ -820,12 +841,15 @@ live_action_start() {
 }
 
 # Runs <function> with its arguments and keeps a copy of the output in the evidence folder.
+# EVIDENCE_DIR names that folder for the function.
+EVIDENCE_DIR=""
 with_evidence() {
   local label="$1" evidence code=0
   shift
   mkdir -p "${EVIDENCE_ROOT}"
   evidence="${EVIDENCE_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)-${label}"
   mkdir -p "${evidence}"
+  EVIDENCE_DIR="${evidence}"
   echo "Evidence folder: ${evidence}"
   "$@" 2>&1 | tee "${evidence}/${label}.log" || code=$?
   return "${code}"
@@ -910,10 +934,10 @@ smtp_setup() {
   wait_health "${LIVE_URL}"
 }
 
-# Sets one key in .env: replaces the line, also a commented one, or appends it. The value
-# goes through the environment, so quotes, & and | in a password are safe.
+# Sets one key in .env (the live one, or <env file>): replaces the line, also a commented
+# one, or appends it. The value goes through the environment, so quotes, & and | are safe.
 set_env_key() {
-  ENV_KEY="$1" ENV_VALUE="$2" python3 - "${COMPOSE_DIR}/.env" <<'PY'
+  ENV_KEY="$1" ENV_VALUE="$2" python3 - "${3:-${COMPOSE_DIR}/.env}" <<'PY'
 import os, re, sys
 path, key, value = sys.argv[1], os.environ["ENV_KEY"], os.environ["ENV_VALUE"]
 if any(c in value for c in " #$'\"\\"):
@@ -931,6 +955,47 @@ with open(path, "w") as handle:
 PY
 }
 
+
+assistant_prompt_wrapper() {
+  local sha="${1:-}" mode="${2:-show}"
+  check_sha "${sha}"
+  [[ "${mode}" =~ ^(set|reset|show)$ ]] || die "The second argument must be set, reset or show."
+  with_evidence assistant-prompt assistant_prompt "${sha}" "${mode}"
+}
+
+# Sets, resets or shows the prompt of the default assistant through the admin API.
+assistant_prompt() {
+  local sha="$1" mode="$2"
+  section "vm-bootstrap assistant-prompt ${mode} ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  live_action_start "${sha}"
+  python3 "${ONYX_SRC_DIR}/product/deploy/default_assistant.py" --base-url "${LIVE_URL}" "${mode}"
+}
+
+chat_check_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence chat-check chat_check "${sha}"
+}
+
+# Repeats the chat steps of verify on the live stack with the state of the last verify.
+# It stops nothing and touches no volume.
+chat_check() {
+  local sha="$1" state step
+  section "vm-bootstrap chat-check ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  live_action_start "${sha}"
+  state="$(find "${EVIDENCE_ROOT}" -mindepth 2 -maxdepth 2 -name state.json | sort | tail -n 1)"
+  [[ -n "${state}" ]] || die "No state.json in ${EVIDENCE_ROOT}. Run the verify action first."
+  echo "State of the last verify: ${state}"
+  cp "${state}" "${EVIDENCE_DIR}/state.json"
+  export USER_A_EMAIL USER_A_PASSWORD USER_B_EMAIL USER_B_PASSWORD
+  for step in chat chat-forced; do
+    run_step "${step}" python3 "${ONYX_SRC_DIR}/product/test-corpus/run_checks.py" \
+      --base-url "${LIVE_URL}" --state "${EVIDENCE_DIR}/state.json" "${step}"
+  done
+  summary
+}
 
 # ---------------------------------------------------------------- sealed secrets
 
@@ -972,7 +1037,8 @@ readonly MT_COMPOSE_DIR="${MT_DIR}/deployment/docker_compose"
 readonly MT_PROJECT=onyx-mt
 readonly MT_URL=http://127.0.0.1:3200
 readonly MT_WEB_DOMAIN=http://localhost:3200
-readonly MT_COMPOSE_FILES=(docker-compose.yml compose.override.yml compose.mt.yml)
+# compose.saas.yml holds the application settings, compose.mt.yml the test-stack specifics.
+readonly MT_COMPOSE_FILES=(docker-compose.yml compose.override.yml compose.saas.yml compose.mt.yml)
 readonly MT_TAG_FILE="${MT_DIR}/mt-tag"
 readonly MT_SALT_FILE="${MT_DIR}/mt-salt"
 readonly MT_STATE_FILE="${MT_DIR}/mt_state.json"
@@ -984,31 +1050,48 @@ mt_project_guard() {
   [[ "${MT_PROJECT}" == onyx-mt ]] || die "The multi-tenant project name must be onyx-mt, not ${MT_PROJECT}."
 }
 
+# ----- helpers shared by the multi-tenant stacks (test: onyx-mt, production: onyx-saas)
+
+# Runs docker compose for <project> in <dir> with the -f files of <list> (colon separated).
 # The -f options are explicit, because sudo drops a COMPOSE_FILE value from the shell.
-mt_compose() {
-  mt_project_guard
+stack_compose() {
+  local project="$1" dir="$2" list="$3" file
+  shift 3
   local -a files=()
-  local file
-  for file in "${MT_COMPOSE_FILES[@]}"; do
+  while IFS= read -r -d: file; do
     files+=(-f "${file}")
+  done < <(printf '%s:' "${list}")
+  (cd "${dir}" && dk compose -p "${project}" "${files[@]}" "$@")
+}
+
+# Joins the arguments with colons, for stack_compose and COMPOSE_FILE.
+join_colon() {
+  local IFS=:
+  echo "$*"
+}
+
+# True when every file of the list, and .env, exists in <dir>.
+stack_files_present() {
+  local dir="$1" file
+  shift
+  for file in "$@" .env; do
+    [[ -f "${dir}/${file}" ]] || return 1
   done
-  (cd "${MT_COMPOSE_DIR}" && dk compose -p "${MT_PROJECT}" "${files[@]}" "$@")
 }
 
-mt_compose_files_present() {
-  local file
-  for file in "${MT_COMPOSE_FILES[@]}" .env; do
-    [[ -f "${MT_COMPOSE_DIR}/${file}" ]] || return 1
-  done
+# All containers of a project, also stopped ones.
+stack_containers() {
+  dk ps -aq --filter "label=com.docker.compose.project=$1"
 }
 
-mt_containers() {
-  dk ps -aq --filter "label=com.docker.compose.project=${MT_PROJECT}"
+# Running containers of a project.
+stack_running() {
+  dk ps -q --filter "label=com.docker.compose.project=$1"
 }
 
-# Sets one key in the multi-tenant .env (same method as make-env.sh). Plain values only.
-mt_env_pin() {
-  local key="$1" value="$2" env_file="${MT_COMPOSE_DIR}/.env"
+# Sets one key in <env file> (same method as make-env.sh). Plain values only.
+stack_env_pin() {
+  local env_file="$1" key="$2" value="$3"
   if grep -qE "^#? ?${key}=" "${env_file}"; then
     sed -i -E "s|^#? ?${key}=.*|${key}=${value}|" "${env_file}"
   else
@@ -1016,28 +1099,93 @@ mt_env_pin() {
   fi
 }
 
-# Prints the last value of a key in the multi-tenant .env, without outer quotes.
-mt_env_value() {
-  sed -n -E "s/^[[:space:]]*${1}[[:space:]]*=[[:space:]]*//p" "${MT_COMPOSE_DIR}/.env" | tail -n 1 |
+# Prints the last value of a key in <env file>, without outer quotes.
+stack_env_value() {
+  sed -n -E "s/^[[:space:]]*${2}[[:space:]]*=[[:space:]]*//p" "$1" | tail -n 1 |
     sed -E -e 's/[[:space:]]+$//' -e "s/^[\"'](.*)[\"']$/\1/"
 }
 
-# Settings that the multi-tenant mode needs in .env. No value is printed.
-mt_env_settings() {
+# Settings that the multi-tenant mode needs in <env file>. No value is printed.
+stack_env_settings() {
+  local env_file="$1"
   # DEV_MODE lets an empty USER_AUTH_SECRET pass (onyx/auth/users.py:235). Never start so.
-  [[ -n "$(mt_env_value USER_AUTH_SECRET)" ]] ||
-    die "USER_AUTH_SECRET is empty in ${MT_COMPOSE_DIR}/.env. Set it with: openssl rand -hex 32"
+  [[ -n "$(stack_env_value "${env_file}" USER_AUTH_SECRET)" ]] ||
+    die "USER_AUTH_SECRET is empty in ${env_file}. Set it with: openssl rand -hex 32"
   # The schema_private migration creates a read-only Postgres role. The code default of the
   # password is "password" (app_configs.py:2034-2036), so write a strong one once.
-  [[ -n "$(mt_env_value DB_READONLY_USER)" ]] || mt_env_pin DB_READONLY_USER db_readonly_user
-  if [[ -z "$(mt_env_value DB_READONLY_PASSWORD)" ]]; then
-    mt_env_pin DB_READONLY_PASSWORD "$(openssl rand -hex 24)"
-    echo "Wrote DB_READONLY_PASSWORD into ${MT_COMPOSE_DIR}/.env (value not shown)."
+  [[ -n "$(stack_env_value "${env_file}" DB_READONLY_USER)" ]] ||
+    stack_env_pin "${env_file}" DB_READONLY_USER db_readonly_user
+  if [[ -z "$(stack_env_value "${env_file}" DB_READONLY_PASSWORD)" ]]; then
+    stack_env_pin "${env_file}" DB_READONLY_PASSWORD "$(openssl rand -hex 24)"
+    echo "Wrote DB_READONLY_PASSWORD into ${env_file} (value not shown)."
   fi
-  # No tracking calls from a validation stack.
-  [[ -z "$(mt_env_value HUBSPOT_TRACKING_URL)" ]] ||
-    die "HUBSPOT_TRACKING_URL is set in ${MT_COMPOSE_DIR}/.env. Remove it."
+  # No tracking calls from our stacks.
+  [[ -z "$(stack_env_value "${env_file}" HUBSPOT_TRACKING_URL)" ]] ||
+    die "HUBSPOT_TRACKING_URL is set in ${env_file}. Remove it."
   echo "USER_AUTH_SECRET, DB_READONLY_USER and DB_READONLY_PASSWORD are set (values not shown)."
+}
+
+# Pins the project name and the compose file list in <env file>. A plain "docker compose"
+# in that folder then addresses the right project, never onyx.
+stack_env_pin_compose() {
+  local env_file="$1" project="$2"
+  shift 2
+  stack_env_pin "${env_file}" COMPOSE_PROJECT_NAME "${project}"
+  stack_env_pin "${env_file}" COMPOSE_FILE "$(join_colon "$@")"
+  echo "Set COMPOSE_PROJECT_NAME and COMPOSE_FILE in ${env_file}."
+}
+
+# Creates the check tag and the password salt once. The salt is never printed.
+# Prints the tag on the last line.
+stack_ensure_check_secrets() {
+  local tag_file="$1" salt_file="$2" prefix="$3" tag
+  if [[ ! -s "${tag_file}" ]]; then
+    echo "${prefix}-$(openssl rand -hex 4)" >"${tag_file}"
+    echo "Created ${tag_file}."
+  fi
+  if [[ ! -s "${salt_file}" ]]; then
+    (umask 077 && openssl rand -hex 32 >"${salt_file}")
+    echo "Created ${salt_file} (mode 600, value not shown)."
+  fi
+  chmod 600 "${salt_file}"
+  tag="$(cat "${tag_file}")"
+  [[ "${tag}" =~ ^[a-z0-9][a-z0-9-]{0,23}$ ]] || die "${tag_file} does not hold a valid tag."
+  echo "Tag: ${tag}"
+}
+
+# Runs mt_checks.py against <url>. Mode: empty or after-restart.
+stack_run_checks() {
+  local url="$1" tag_file="$2" salt_file="$3" state_file="$4" prefix="$5" mode="${6:-}"
+  local checks="${ONYX_SRC_DIR}/product/test-corpus/mt_checks.py" tag
+  [[ -f "${checks}" ]] || { echo "ERROR: ${checks} is missing at this commit." >&2; return 1; }
+  stack_ensure_check_secrets "${tag_file}" "${salt_file}" "${prefix}"
+  tag="$(cat "${tag_file}")"
+  local -a args=(--base-url "${url}" --tag "${tag}" --state "${state_file}")
+  [[ "${mode}" != after-restart ]] || args+=(--after-restart)
+  MT_PASSWORD_SALT="$(cat "${salt_file}")" python3 "${checks}" "${args[@]}"
+}
+
+# ----- test stack (onyx-mt)
+
+mt_compose() {
+  mt_project_guard
+  stack_compose "${MT_PROJECT}" "${MT_COMPOSE_DIR}" "$(join_colon "${MT_COMPOSE_FILES[@]}")" "$@"
+}
+
+mt_compose_files_present() {
+  stack_files_present "${MT_COMPOSE_DIR}" "${MT_COMPOSE_FILES[@]}"
+}
+
+mt_containers() {
+  stack_containers "${MT_PROJECT}"
+}
+
+mt_env_pin() {
+  stack_env_pin "${MT_COMPOSE_DIR}/.env" "$@"
+}
+
+mt_env_value() {
+  stack_env_value "${MT_COMPOSE_DIR}/.env" "$1"
 }
 
 # Refuses to start when the VM has less than MT_MIN_AVAILABLE_KB free for a new stack.
@@ -1048,7 +1196,7 @@ mt_memory_gate() {
   available="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
   [[ "${available}" =~ ^[0-9]+$ ]] || die "MemAvailable is not in /proc/meminfo."
   echo "MemAvailable: $((available / 1024)) MiB. mt-up needs $((MT_MIN_AVAILABLE_KB / 1024)) MiB."
-  if [[ -n "$(dk ps -q --filter "label=com.docker.compose.project=${MT_PROJECT}")" ]]; then
+  if [[ -n "$(stack_running "${MT_PROJECT}")" ]]; then
     echo "Project ${MT_PROJECT} runs already, so its memory is in use. The check does not apply."
     return 0
   fi
@@ -1056,7 +1204,7 @@ mt_memory_gate() {
     die "Only $((available / 1024)) MiB of memory is available. The multi-tenant stack needs about 6 GiB next to the live stack. Nothing was started."
 }
 
-# Creates the folder, exports the release files and compose.mt.yml, and writes .env once.
+# Creates the folder, exports the release files and the overlays, and writes .env once.
 mt_prepare() {
   local sha="$1"
   section "multi-tenant folder ${MT_DIR}"
@@ -1066,8 +1214,8 @@ mt_prepare() {
   fi
   checkout_source "${sha}"
   export_release_files "${MT_COMPOSE_DIR}" "${sha}"
-  git -C "${ONYX_SRC_DIR}" show "${sha}:product/deploy/mt/compose.mt.yml" >"${MT_COMPOSE_DIR}/compose.mt.yml"
-  echo "Exported compose.mt.yml."
+  export_overlay "${sha}" product/deploy/mt/compose.saas.yml "${MT_COMPOSE_DIR}"
+  export_overlay "${sha}" product/deploy/mt/compose.mt.yml "${MT_COMPOSE_DIR}"
   if [[ -f "${MT_COMPOSE_DIR}/.env" ]]; then
     echo "${MT_COMPOSE_DIR}/.env exists. The script keeps it."
   else
@@ -1077,14 +1225,8 @@ mt_prepare() {
   if [[ -f "${COMPOSE_DIR}/.env" ]] && cmp -s "${COMPOSE_DIR}/.env" "${MT_COMPOSE_DIR}/.env"; then
     die "${MT_COMPOSE_DIR}/.env is a copy of the live .env. Remove it; mt-up then writes new secrets."
   fi
-  # A plain "docker compose" in this folder then also addresses onyx-mt, never onyx.
-  mt_env_pin COMPOSE_PROJECT_NAME "${MT_PROJECT}"
-  mt_env_pin COMPOSE_FILE "$(
-    IFS=:
-    echo "${MT_COMPOSE_FILES[*]}"
-  )"
-  echo "Set COMPOSE_PROJECT_NAME and COMPOSE_FILE in ${MT_COMPOSE_DIR}/.env."
-  mt_env_settings
+  stack_env_pin_compose "${MT_COMPOSE_DIR}/.env" "${MT_PROJECT}" "${MT_COMPOSE_FILES[@]}"
+  stack_env_settings "${MT_COMPOSE_DIR}/.env"
 }
 
 mt_report() {
@@ -1115,32 +1257,9 @@ mt_up() {
   section "mt-up complete: ${sha} with $(release_value ONYX_RELEASE_TAG) at ${MT_URL}"
 }
 
-# Creates the tag and the password salt once. The salt is never printed.
-mt_ensure_secrets() {
-  local tag
-  if [[ ! -s "${MT_TAG_FILE}" ]]; then
-    echo "mt-$(openssl rand -hex 4)" >"${MT_TAG_FILE}"
-    echo "Created ${MT_TAG_FILE}."
-  fi
-  if [[ ! -s "${MT_SALT_FILE}" ]]; then
-    (umask 077 && openssl rand -hex 32 >"${MT_SALT_FILE}")
-    echo "Created ${MT_SALT_FILE} (mode 600, value not shown)."
-  fi
-  chmod 600 "${MT_SALT_FILE}"
-  tag="$(cat "${MT_TAG_FILE}")"
-  [[ "${tag}" =~ ^[a-z0-9][a-z0-9-]{0,23}$ ]] || die "${MT_TAG_FILE} does not hold a valid tag."
-  echo "Tag: ${tag}"
-}
-
-# Runs mt_checks.py against the multi-tenant stack. Mode: empty or after-restart.
+# Runs mt_checks.py against the test stack. Mode: empty or after-restart.
 mt_run_checks() {
-  local mode="${1:-}" checks="${ONYX_SRC_DIR}/product/test-corpus/mt_checks.py" tag
-  [[ -f "${checks}" ]] || { echo "ERROR: ${checks} is missing at this commit." >&2; return 1; }
-  mt_ensure_secrets
-  tag="$(cat "${MT_TAG_FILE}")"
-  local -a args=(--base-url "${MT_URL}" --tag "${tag}" --state "${MT_STATE_FILE}")
-  [[ "${mode}" != after-restart ]] || args+=(--after-restart)
-  MT_PASSWORD_SALT="$(cat "${MT_SALT_FILE}")" python3 "${checks}" "${args[@]}"
+  stack_run_checks "${MT_URL}" "${MT_TAG_FILE}" "${MT_SALT_FILE}" "${MT_STATE_FILE}" mt "${1:-}"
 }
 
 mt_check_wrapper() {
@@ -1237,6 +1356,459 @@ mt_destroy() {
   rm -f "${MT_STATE_FILE}"
   echo "Project ${MT_PROJECT} has no containers and no volumes. Removed ${MT_STATE_FILE}."
   show "volumes left (${MT_PROJECT})" dk volume ls --filter "label=com.docker.compose.project=${MT_PROJECT}"
+}
+
+# ---------------------------------------------------------------- multi-tenant production stack
+
+# The production multi-tenant stack (project onyx-saas) takes the public URL over from the
+# live single-tenant project onyx. cutover makes a cold backup, stops onyx (never down -v)
+# and starts onyx-saas with the same certificate. rollback starts onyx again. The volumes of
+# both projects stay. See docs/product/MULTI-TENANT.md, section 6.
+readonly SAAS_DIR="${SRV_ROOT}/onyx-saas"
+readonly SAAS_PROJECT=onyx-saas
+readonly SAAS_COMPOSE_DIR="${SAAS_DIR}/deployment/docker_compose"
+# compose.https.yml comes last: its nginx ports, command and volumes win.
+readonly SAAS_COMPOSE_FILES=(docker-compose.yml compose.override.yml compose.saas.yml compose.https.yml)
+readonly SAAS_URL="https://${DNS_NAME}"
+readonly SAAS_TAG_FILE="${SAAS_DIR}/saas-tag"
+readonly SAAS_SALT_FILE="${SAAS_DIR}/saas-salt"
+readonly SAAS_STATE_FILE="${SAAS_DIR}/mt_state.json"
+readonly LIVE_DATA_DIR="${ONYX_DEPLOY_DIR}/deployment/data"
+readonly SAAS_DATA_DIR="${SAAS_DIR}/deployment/data"
+# 1 while cutover has the live stack stopped and onyx-saas is not yet healthy.
+CUTOVER_LIVE_STOPPED=0
+
+saas_project_guard() {
+  [[ "${SAAS_PROJECT}" == onyx-saas ]] || die "The production multi-tenant project name must be onyx-saas, not ${SAAS_PROJECT}."
+}
+
+saas_compose() {
+  saas_project_guard
+  stack_compose "${SAAS_PROJECT}" "${SAAS_COMPOSE_DIR}" "$(join_colon "${SAAS_COMPOSE_FILES[@]}")" "$@"
+}
+
+saas_compose_files_present() {
+  stack_files_present "${SAAS_COMPOSE_DIR}" "${SAAS_COMPOSE_FILES[@]}"
+}
+
+# Runs mt_checks.py against the production stack. Mode: empty or after-restart. With
+# secrets/model.env, the company checks also configure the model; the values stay in the env.
+saas_run_checks() {
+  (
+    if [[ -f "${SECRETS_DIR}/model.env" ]]; then
+      # shellcheck disable=SC1090,SC1091
+      source "${SECRETS_DIR}/model.env"
+      export MODEL_API_KEY="${MODEL_API_KEY:-}" MODEL_PROVIDER="${MODEL_PROVIDER:-}" \
+        MODEL_NAME="${MODEL_NAME:-}" MODEL_API_BASE="${MODEL_API_BASE:-}"
+      echo "model.env found: the company checks configure the model"
+    else
+      echo "No ${SECRETS_DIR}/model.env: the chat checks are skipped."
+    fi
+    stack_run_checks "${SAAS_URL}" "${SAAS_TAG_FILE}" "${SAAS_SALT_FILE}" "${SAAS_STATE_FILE}" saas "${1:-}"
+  )
+}
+
+# The volumes of both projects. The live volumes (onyx_*) must always be in the list.
+list_stack_volumes() {
+  dk volume ls --filter label=com.docker.compose.project=onyx
+  dk volume ls --filter "label=com.docker.compose.project=${SAAS_PROJECT}" --format '{{.Name}}'
+}
+
+saas_report() {
+  show "docker compose ps (${SAAS_PROJECT})" saas_compose ps
+  show "docker compose images (${SAAS_PROJECT})" saas_compose images
+  show "volumes of onyx and ${SAAS_PROJECT}" list_stack_volumes
+  show "memory" free -m
+}
+
+# ----- inventory
+
+inventory_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence inventory inventory_live "${sha}"
+}
+
+# Runs one SQL statement in the live Postgres and prints the rows. Errors are silent.
+live_sql() {
+  live_compose exec -T relational_db psql -U "$(live_env_value POSTGRES_USER postgres)" \
+    -d "$(live_env_value POSTGRES_DB postgres)" -v ON_ERROR_STOP=1 -At -c "$1" 2>/dev/null
+}
+
+# Prints "<label>: <value>" or "<label>: query failed". One failed query stops nothing.
+live_count() {
+  local label="$1" sql="$2" value
+  value="$(live_sql "${sql}")" || { echo "${label}: query failed"; return 0; }
+  echo "${label}: ${value}"
+}
+
+# Prints the value of <key> in a JSON file, the length when it is a list, or "?".
+# Key "-" means the whole document.
+json_value() {
+  python3 -c '
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    if sys.argv[2] != "-":
+        data = data[sys.argv[2]]
+    print(len(data) if isinstance(data, list) else data)
+except Exception:
+    print("?")
+' "$1" "$2"
+}
+
+# Read-only inventory of the live single-tenant stack before the cutover. The log shows
+# counts only. The emails and connector names go to inventory.txt (mode 600) in the evidence folder.
+inventory_live() {
+  local sha="$1" report="${EVIDENCE_DIR}/inventory.txt" users_total
+  section "vm-bootstrap inventory ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  [[ -f "${COMPOSE_DIR}/.env" ]] || die "${COMPOSE_DIR}/.env is missing. Run the install action first."
+  set_live_url
+  wait_health "${LIVE_URL}" 60 || die "The live stack is not healthy."
+  checkout_source "${sha}"
+
+  section "database counts (project onyx)"
+  users_total="$(live_sql 'SELECT count(*) FROM "user"' || echo '?')"
+  echo "users: ${users_total}"
+  live_count "active users" 'SELECT count(*) FROM "user" WHERE is_active'
+  live_count "admins (role = ADMIN)" "SELECT count(*) FROM \"user\" WHERE role = 'ADMIN'"
+  echo "connectors by source:"
+  live_sql "SELECT '  ' || source || ': ' || count(*) FROM connector GROUP BY source ORDER BY source" ||
+    echo "  query failed"
+  live_count "connector_credential_pair" 'SELECT count(*) FROM connector_credential_pair'
+  live_count "document" 'SELECT count(*) FROM document'
+  live_count "chat_session" 'SELECT count(*) FROM chat_session'
+  live_count "chat_message" 'SELECT count(*) FROM chat_message'
+  live_count "user_file" 'SELECT count(*) FROM user_file'
+  live_count "persona (not builtin_persona)" 'SELECT count(*) FROM persona WHERE NOT builtin_persona'
+  live_count "persona (not is_default_persona)" 'SELECT count(*) FROM persona WHERE NOT is_default_persona'
+  live_count "llm_provider" 'SELECT count(*) FROM llm_provider'
+  live_count "document_set" 'SELECT count(*) FROM document_set'
+  live_count "user_group (EE table)" 'SELECT count(*) FROM user_group'
+
+  section "detailed report"
+  install -m 600 /dev/null "${report}"
+  {
+    echo "# inventory of the live stack, ${sha}, $(date -u +%FT%TZ)"
+    echo "## users (email, role, is_active)"
+    live_sql 'SELECT email, role, is_active FROM "user" ORDER BY email' ||
+      live_sql 'SELECT email, is_active FROM "user" ORDER BY email' || echo "query failed"
+    echo "## connectors (id, name, source)"
+    live_sql 'SELECT id, name, source FROM connector ORDER BY id' || echo "query failed"
+  } >>"${report}"
+  echo "Written: ${report} (mode 600, holds the emails and connector names)."
+
+  section "API counts"
+  inventory_api || echo "API counts skipped (see above)."
+
+  section "Needs recreation or manual transfer after cutover:"
+  echo "- Accounts: ${users_total} in the live stack. Every account must sign up again on the new stack."
+  echo "  The first sign-up of an email creates its company and makes it admin. Passwords are not copied."
+  echo "- Connectors, documents, chats and files stay in the old volumes (project onyx). They are not migrated."
+  echo "- The LLM provider and the settings must be configured again in each company."
+}
+
+# Counts through the public API as the admin test user. Returns 1 when the login fails.
+inventory_api() {
+  local work_dir code
+  [[ -f "${USERS_FILE}" ]] || { echo "${USERS_FILE} is missing: no API counts."; return 1; }
+  work_dir="$(mktemp -d)"
+  export TMPDIR="${work_dir}"
+  # shellcheck disable=SC1090
+  source "${USERS_FILE}"
+  export ADMIN_EMAIL ADMIN_PASSWORD
+  (admin_login "${LIVE_URL}" "${work_dir}/admin.jar") || { echo "admin login failed: no API counts."; return 1; }
+  ADMIN_JAR="${work_dir}/admin.jar"
+  # v4.8.4 has no GET /api/admin/settings. GET /api/settings carries the same fields.
+  code="$(api GET /api/admin/settings "${work_dir}/settings.out")"
+  [[ "${code}" == 200 ]] || code="$(api GET /api/settings "${work_dir}/settings.out")"
+  if [[ "${code}" == 200 ]]; then
+    echo "invite_only_enabled: $(json_value "${work_dir}/settings.out" invite_only_enabled)"
+  else
+    echo "settings: GET returned ${code}"
+  fi
+  code="$(api GET '/api/manage/users/accepted?page_num=0&page_size=1000' "${work_dir}/accepted.out")"
+  if [[ "${code}" == 200 ]]; then
+    echo "accepted users (API): $(json_value "${work_dir}/accepted.out" items)"
+  else
+    echo "accepted users: GET returned ${code}"
+  fi
+  code="$(api GET /api/manage/users/invited "${work_dir}/invited.out")"
+  if [[ "${code}" == 200 ]]; then
+    echo "invited users (API): $(json_value "${work_dir}/invited.out" -)"
+  else
+    echo "invited users: GET returned ${code}"
+  fi
+}
+
+# ----- cutover
+
+cutover_wrapper() {
+  local sha="${1:-}" email="${2:-}"
+  check_sha "${sha}"
+  is_email "${email}" || die "Give the Let's Encrypt account email (the one of the https action)."
+  with_evidence cutover cutover "${sha}" "${email}"
+}
+
+# Moves the public URL from project onyx to project onyx-saas. Order: checks, cold backup,
+# saas folder and .env, certificate copy, pull, stop onyx, start onyx-saas, health checks.
+# A failed start stops onyx-saas and starts onyx again. onyx never gets "down"; its volumes stay.
+# $2 is the Let's Encrypt email. The wrapper validates it; the account itself travels inside
+# certbot/conf. The log never shows it.
+cutover() {
+  local sha="$1" backup_dir
+  section "vm-bootstrap cutover ${sha} $(date -u +%FT%TZ)"
+  docker info >/dev/null 2>&1 ||
+    die "docker does not work without sudo. backup.sh needs it. Log in again after the install action."
+  docker_setup
+  saas_project_guard
+  [[ -f "${COMPOSE_DIR}/.env" ]] || die "${COMPOSE_DIR}/.env is missing. Run the install action first."
+  [[ -z "$(stack_running "${SAAS_PROJECT}")" ]] ||
+    die "Project ${SAAS_PROJECT} has running containers. Run rollback or saas-down first, or use the saas-* actions."
+  set_live_url
+  [[ -n "${PUBLIC_URL}" ]] || die "The live .env has no compose.https.yml in COMPOSE_FILE. Run the https action first."
+  wait_health "${LIVE_URL}" 60 || die "The live stack is not healthy. Nothing was changed."
+  [[ -f "${LIVE_DATA_DIR}/certbot/conf/live/${DNS_NAME}/fullchain.pem" ]] ||
+    die "No certificate for ${DNS_NAME} in ${LIVE_DATA_DIR}/certbot/conf. Run the https action first."
+  checkout_source "${sha}"
+
+  backup_dir="${BACKUP_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)-pre-cutover"
+  section "cold backup of the live stack into ${backup_dir}"
+  "${ONYX_SRC_DIR}/product/deploy/backup.sh" "${COMPOSE_DIR}" "${backup_dir}" onyx
+  verify_backup "${backup_dir}"
+  wait_health "${LIVE_URL}" ||
+    die "The live stack did not come back after the backup. Start it: cd ${COMPOSE_DIR} && docker compose start"
+
+  saas_prepare "${sha}"
+  saas_copy_https_files
+  section "docker compose -p ${SAAS_PROJECT} pull"
+  saas_compose pull --quiet
+
+  section "stopping the live stack (project onyx, volumes stay)"
+  trap 'on_cutover_exit' EXIT
+  CUTOVER_LIVE_STOPPED=1
+  live_compose stop
+  section "docker compose -p ${SAAS_PROJECT} up -d"
+  saas_compose up -d
+  wait_health "${SAAS_URL}" || die "${SAAS_PROJECT} is not healthy at ${SAAS_URL}."
+  PUBLIC_URL="${SAAS_URL}"
+  check_public_url || die "The public URL checks failed on ${SAAS_PROJECT}."
+  CUTOVER_LIVE_STOPPED=0
+  show "file store bucket job" saas_compose logs --no-log-prefix mt_minio_bucket
+  saas_report
+  section "cutover complete: ${SAAS_PROJECT} serves ${SAAS_URL}"
+  echo "Backup of the live stack: ${backup_dir}"
+  echo "Rollback: workflow action rollback, or on the VM: vm-bootstrap.sh rollback ${sha}"
+}
+
+# After a failed start: stops onyx-saas and starts onyx again, so the old service is back.
+on_cutover_exit() {
+  local code=$?
+  if ((CUTOVER_LIVE_STOPPED)); then
+    echo "cutover failed (exit ${code}) while the live stack was stopped. Stopping ${SAAS_PROJECT} and starting onyx again." >&2
+    saas_compose stop || true
+    live_compose start || true
+    set_live_url
+    wait_health "${LIVE_URL}" || echo "ERROR: the live stack is not healthy. Run the rollback action." >&2
+  fi
+}
+
+# Checks the backup folder: SHA256SUMS exists and every checksum passes.
+verify_backup() {
+  local backup_dir="$1"
+  [[ -f "${backup_dir}/SHA256SUMS" ]] || die "No SHA256SUMS in ${backup_dir}. Nothing more was changed."
+  (cd "${backup_dir}" && sha256sum -c --quiet SHA256SUMS) ||
+    die "The checksums in ${backup_dir} do not pass. Nothing more was changed."
+  echo "Backup ${backup_dir}: SHA256SUMS passes."
+  ls -la "${backup_dir}"
+}
+
+# Creates the saas folder, exports the release files and the overlays, and writes .env once.
+# Every run pins the domain, the compose files and the cloud web image.
+saas_prepare() {
+  local sha="$1" env_file="${SAAS_COMPOSE_DIR}/.env" cloud_image
+  section "production multi-tenant folder ${SAAS_DIR}"
+  if [[ ! -d "${SAAS_DIR}" ]]; then
+    sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${SAAS_DIR}" || die "sudo -n cannot create ${SAAS_DIR}."
+  fi
+  export_release_files "${SAAS_COMPOSE_DIR}" "${sha}"
+  export_overlay "${sha}" product/deploy/mt/compose.saas.yml "${SAAS_COMPOSE_DIR}"
+  export_overlay "${sha}" product/deploy/compose.https.yml "${SAAS_COMPOSE_DIR}"
+  cloud_image="$(release_value ONYX_WEB_SERVER_IMAGE_CLOUD)"
+  [[ -n "${cloud_image}" ]] || die "ONYX_WEB_SERVER_IMAGE_CLOUD is missing in release.env."
+  if [[ -f "${env_file}" ]]; then
+    echo "${env_file} exists. The script keeps its secrets."
+  else
+    # New secrets. The live .env is never copied.
+    "${ONYX_SRC_DIR}/product/deploy/make-env.sh" "${SAAS_COMPOSE_DIR}" "${SAAS_URL}"
+  fi
+  if cmp -s "${COMPOSE_DIR}/.env" "${env_file}"; then
+    die "${env_file} is a copy of the live .env. Remove it; cutover then writes new secrets."
+  fi
+  chmod 600 "${env_file}"
+  stack_env_pin "${env_file}" DOMAIN "${DNS_NAME}"
+  stack_env_pin "${env_file}" WEB_DOMAIN "${SAAS_URL}"
+  # The multi-tenant stack needs the web build with NEXT_PUBLIC_CLOUD_ENABLED=true.
+  stack_env_pin "${env_file}" ONYX_WEB_SERVER_IMAGE "${cloud_image}"
+  echo "Set DOMAIN, WEB_DOMAIN and ONYX_WEB_SERVER_IMAGE (cloud build) in ${env_file}."
+  stack_env_pin_compose "${env_file}" "${SAAS_PROJECT}" "${SAAS_COMPOSE_FILES[@]}"
+  stack_env_settings "${env_file}"
+  saas_merge_secrets "${env_file}"
+}
+
+# Writes the KEY=value lines of secrets/saas.env into the saas .env. The log shows key names only.
+saas_merge_secrets() {
+  local env_file="$1" file="${SECRETS_DIR}/saas.env" line key value keys=""
+  [[ -f "${file}" ]] || { echo "No ${file}: no extra keys for the saas .env."; return 0; }
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" =~ ^[[:space:]]*(#|$) ]] && continue
+    [[ "${line}" =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] ||
+      die "${file} has a line that is not KEY=value (the line is not shown)."
+    key="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[3]}"
+    # One layer of matching quotes goes. set_env_key quotes again when needed.
+    if [[ "${value}" =~ ^\"(.*)\"$ || "${value}" =~ ^\'(.*)\'$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    fi
+    set_env_key "${key}" "${value}" "${env_file}"
+    keys+=" ${key}"
+  done <"${file}"
+  echo "Set from ${file} (values not shown):${keys}"
+}
+
+# Copies the Let's Encrypt files and the nginx redirect files of the live stack. The copies
+# keep their owner (certbot writes as root). An existing certbot/conf copy stays as it is.
+saas_copy_https_files() {
+  section "certificate and nginx files"
+  mkdir -p "${SAAS_DATA_DIR}/certbot" "${SAAS_DATA_DIR}/nginx-extra"
+  if [[ -d "${SAAS_DATA_DIR}/certbot/conf" ]]; then
+    echo "${SAAS_DATA_DIR}/certbot/conf exists. The script keeps it."
+  else
+    sudo -n cp -a "${LIVE_DATA_DIR}/certbot/." "${SAAS_DATA_DIR}/certbot/" ||
+      die "sudo -n cannot copy ${LIVE_DATA_DIR}/certbot."
+    echo "Copied certbot/ (account, certificate and ACME web root)."
+  fi
+  # redirect.conf.template already carries the domain. render-redirect.sh fills in the rest.
+  sudo -n cp -a "${LIVE_DATA_DIR}/nginx-extra/." "${SAAS_DATA_DIR}/nginx-extra/" ||
+    die "sudo -n cannot copy ${LIVE_DATA_DIR}/nginx-extra."
+  echo "Copied nginx-extra/."
+  ls -la "${SAAS_DATA_DIR}/nginx-extra"
+}
+
+# ----- rollback
+
+rollback_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence rollback rollback "${sha}"
+}
+
+# Stops onyx-saas (its volumes stay) and starts onyx again on the public URL.
+rollback() {
+  local sha="$1"
+  section "vm-bootstrap rollback ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  [[ -f "${COMPOSE_DIR}/.env" ]] || die "${COMPOSE_DIR}/.env is missing. The live stack cannot start."
+  section "stopping ${SAAS_PROJECT} (volumes stay)"
+  saas_stop
+  section "starting the live stack (project onyx)"
+  live_compose start
+  set_live_url
+  wait_health "${LIVE_URL}"
+  check_public_url
+  show "docker compose ps (onyx)" live_compose ps
+  show "volumes of onyx and ${SAAS_PROJECT}" list_stack_volumes
+  section "rollback complete: project onyx serves ${LIVE_URL}"
+}
+
+# Stops the containers of onyx-saas. Never "down", never -v.
+saas_stop() {
+  local containers
+  if saas_compose_files_present; then
+    saas_compose stop
+  else
+    containers="$(stack_running "${SAAS_PROJECT}")"
+    [[ -z "${containers}" ]] || xargs -r "${DOCKER_CMD[@]}" stop <<<"${containers}" >/dev/null
+  fi
+  echo "Project ${SAAS_PROJECT} has no running containers."
+}
+
+# ----- saas-check, saas-restart, saas-down
+
+# Stops the script unless onyx-saas, and not onyx, serves the public URL. The checks create
+# accounts, so they must never run against the single-tenant stack.
+saas_must_serve() {
+  [[ -f "${SAAS_COMPOSE_DIR}/.env" ]] || die "${SAAS_COMPOSE_DIR}/.env is missing. Run the cutover action first."
+  [[ -n "$(stack_running "${SAAS_PROJECT}")" ]] || die "Project ${SAAS_PROJECT} has no running containers. Run the cutover action first."
+  [[ -z "$(live_compose ps -q --status running 2>/dev/null)" ]] ||
+    die "The live project onyx has running containers. The checks would run against it. Stop one stack first."
+  wait_health "${SAAS_URL}" 60 || die "${SAAS_PROJECT} is not healthy at ${SAAS_URL}."
+}
+
+saas_check_wrapper() {
+  local sha="${1:-}" mode="${2:-}"
+  check_sha "${sha}"
+  [[ -z "${mode}" || "${mode}" == after-restart ]] || die "The second argument must be after-restart or empty."
+  with_evidence saas-check saas_check "${sha}" "${mode}"
+}
+
+saas_check() {
+  local sha="$1" mode="$2"
+  section "vm-bootstrap saas-check ${sha} $(date -u +%FT%TZ) (mode=${mode:-first})"
+  docker_setup
+  saas_must_serve
+  checkout_source "${sha}"
+  saas_run_checks "${mode}"
+}
+
+saas_restart_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence saas-restart saas_restart "${sha}"
+}
+
+# Recreates the onyx-saas containers and repeats the read checks. "down" never gets -v.
+saas_restart() {
+  local sha="$1" volumes_before volumes_after
+  section "vm-bootstrap saas-restart ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  saas_compose_files_present || die "The files in ${SAAS_COMPOSE_DIR} are missing. Run the cutover action first."
+  [[ -f "${SAAS_STATE_FILE}" ]] || die "${SAAS_STATE_FILE} is missing. Run the saas-check action first."
+  saas_must_serve
+  checkout_source "${sha}"
+
+  volumes_before="$(dk volume ls -q --filter "label=com.docker.compose.project=${SAAS_PROJECT}" | sort)"
+  show "containers before" saas_compose ps --format '{{.Name}} {{.ID}} {{.Status}}'
+  run_step down saas_compose down
+  run_step up saas_compose up -d
+  run_step health wait_health "${SAAS_URL}"
+  PUBLIC_URL="${SAAS_URL}"
+  run_step public-url check_public_url
+  show "containers after" saas_compose ps --format '{{.Name}} {{.ID}} {{.Status}}'
+  volumes_after="$(dk volume ls -q --filter "label=com.docker.compose.project=${SAAS_PROJECT}" | sort)"
+  echo "volumes: ${volumes_after//$'\n'/ }"
+  run_step volumes-kept test -n "${volumes_after}" -a "${volumes_before}" = "${volumes_after}"
+  run_step saas-check-after-restart saas_run_checks after-restart
+  saas_report
+  summary
+}
+
+saas_down_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence saas-down saas_down "${sha}"
+}
+
+# Stops the onyx-saas containers. The volumes stay. There is no destroy action for this stack.
+# The public URL answers nothing until cutover or rollback runs.
+saas_down() {
+  local sha="$1"
+  section "vm-bootstrap saas-down ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  saas_stop
+  show "volumes kept (${SAAS_PROJECT})" dk volume ls --filter "label=com.docker.compose.project=${SAAS_PROJECT}"
+  echo "Start the old service again with the rollback action, or the new one with cutover."
 }
 
 main "$@"

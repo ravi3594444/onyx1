@@ -39,6 +39,8 @@ supports. Do not list or cite unrelated documents to show what you searched.
 
 class Session:
     def __init__(self, base_url: str) -> None:
+        if urllib.parse.urlparse(base_url).scheme not in ("http", "https"):
+            sys.exit(f"--base-url must use http or https: {base_url}")
         self.base_url = base_url.rstrip("/")
         self.jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(
@@ -61,7 +63,7 @@ class Session:
         elif body is not None:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(
+        req = urllib.request.Request(  # noqa: S310
             self.base_url + path, data=data, method=method, headers=headers
         )
         try:
@@ -100,9 +102,13 @@ def main() -> int:
 
     session = Session(args.base_url)
     login(session, email, password)
-    status, config = session.request("GET", "/api/admin/default-assistant/configuration")
+    status, config = session.request(
+        "GET", "/api/admin/default-assistant/configuration"
+    )
     if status != 200 or not isinstance(config, dict):
-        sys.exit(f"GET default-assistant configuration failed with HTTP {status}: {config}")
+        sys.exit(
+            f"GET default-assistant configuration failed with HTTP {status}: {config}"
+        )
     current = config.get("system_prompt")
     default_prompt = str(config.get("default_system_prompt", ""))
     print(
@@ -114,23 +120,31 @@ def main() -> int:
 
     if args.mode == "set":
         if not default_prompt:
-            sys.exit("the API returned an empty built-in default prompt; nothing changed.")
+            sys.exit(
+                "the API returned an empty built-in default prompt; nothing changed."
+            )
         new_prompt = default_prompt.rstrip() + "\n\n" + ASSISTANT_ADDITION + "\n"
         payload: dict[str, Any] = {"system_prompt": new_prompt}
     else:
         payload = {"system_prompt": None}
-    status, body = session.request("PATCH", "/api/admin/default-assistant", body=payload)
+    status, body = session.request(
+        "PATCH", "/api/admin/default-assistant", body=payload
+    )
     if status != 200:
         sys.exit(f"PATCH default-assistant failed with HTTP {status}: {body}")
 
-    status, config = session.request("GET", "/api/admin/default-assistant/configuration")
+    status, config = session.request(
+        "GET", "/api/admin/default-assistant/configuration"
+    )
     after = (config or {}).get("system_prompt") if isinstance(config, dict) else None
     if args.mode == "set":
         ok = isinstance(after, str) and ASSISTANT_ADDITION in after
     else:
         ok = after is None
-    print(f"{'PASS' if ok else 'FAIL'} default assistant prompt {args.mode}: "
-          f"{'built-in default' if after is None else f'custom, {len(after)} chars'}")
+    print(
+        f"{'PASS' if ok else 'FAIL'} default assistant prompt {args.mode}: "
+        f"{'built-in default' if after is None else f'custom, {len(after)} chars'}"
+    )
     return 0 if ok else 1
 
 

@@ -1,0 +1,96 @@
+# 22nd X AI multi-tenant ("SaaS") application overlay for the Onyx v4.8.4 Docker Compose
+# deployment. It holds only application settings: no project name, no ports, no memory
+# limits and no OpenSearch heap. Two stacks use it:
+#   - the TEST stack (project onyx-mt, 127.0.0.1:3200), together with compose.mt.yml;
+#   - the PRODUCTION stack (project onyx-saas, https://my-knowledge.duckdns.org), together
+#     with compose.https.yml. vm-bootstrap.sh cutover sets this up. See README.md here.
+#
+# The application settings are the ones of the upstream overlay
+# deployment/docker_compose/docker-compose.multitenant.yml (tag v4.8.4). The upstream
+# development overlay docker-compose.dev.yml is not used: it publishes the internal ports.
+
+services:
+  api_server:
+    # Upstream: the base "alembic upgrade head" refuses to run with MULTI_TENANT=true. The
+    # schema_private migrations create the public tables. Tenant schemas migrate on sign-up.
+    command: >
+      /bin/sh -c "alembic -n schema_private upgrade head &&
+      echo \"Starting Onyx Api Server\" &&
+      uvicorn onyx.main:app --host 0.0.0.0 --port 8080"
+    environment:
+      - MULTI_TENANT=true
+      - AUTH_TYPE=cloud
+      # Tenant provisioning is Enterprise Edition code. With MULTI_TENANT=true the license
+      # check gives the EE features without a license (check_ee_features_enabled).
+      - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true
+      # Cloud auth needs SMTP for the verification email. The stacks have no SMTP.
+      - REQUIRE_EMAIL_VERIFICATION=false
+      # Upstream sets it on api_server only. Without it, a new company sign-up posts to the
+      # control plane and fails with 500 (provisioning.py:157), and invites call billing
+      # (manage/users.py:682-731). The stacks have no control plane.
+      - DEV_MODE=true
+      # No control plane: every company counts as on trial. Lift the trial caps.
+      - USAGE_LIMITS_ENABLED=false
+      - NUM_FREE_TRIAL_USER_INVITES=100000
+      # Default 5 pre-builds 5 tenant schemas (app_configs.py:1992).
+      - TARGET_AVAILABLE_TENANTS=1
+      # No cross-tenant impersonation (ee/onyx/configs/app_configs.py:151).
+      - SUPER_USERS=[]
+      # Default true. Creates the OpenSearch index of a tenant when it is first used.
+      - VERIFY_CREATE_OPENSEARCH_INDEX_ON_INIT_MT=true
+      # Upstream opt-in per-IP limit on /auth/register (5 per hour, uses Redis).
+      - SIGNUP_RATE_LIMIT_ENABLED=true
+    depends_on:
+      mt_minio_bucket:
+        condition: service_completed_successfully
+        required: false
+
+  background:
+    environment:
+      - MULTI_TENANT=true
+      - AUTH_TYPE=cloud
+      - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true
+      - REQUIRE_EMAIL_VERIFICATION=false
+      # See api_server. Upstream does not set it here; the background tasks also provision
+      # tenants and call the control plane without it.
+      - DEV_MODE=true
+      # No control plane: every company counts as on trial. Lift the trial caps.
+      - USAGE_LIMITS_ENABLED=false
+      - NUM_FREE_TRIAL_USER_INVITES=100000
+      - TARGET_AVAILABLE_TENANTS=1
+      - SUPER_USERS=[]
+      - VERIFY_CREATE_OPENSEARCH_INDEX_ON_INIT_MT=true
+
+  web_server:
+    environment:
+      - ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true
+
+  nginx:
+    environment:
+      # render-redirect.sh then answers POST /api/tenants/leave-team with 409
+      # (see product/deploy/nginx/render-redirect.sh).
+      - LEAVE_TEAM_GUARD=true
+
+  # With MULTI_TENANT=true the api_server does not create the file store bucket
+  # (onyx/main.py:428-431; cloud uses IaC). This one-shot job creates it. The MinIO image
+  # ships mc (its health check uses it). Same profile as minio.
+  mt_minio_bucket:
+    image: ${BASE_IMAGE_REGISTRY:-docker.io}/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5
+    profiles: ["s3-filestore"]
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - MC_CONFIG_DIR=/tmp/.mc
+      - MT_BUCKET=${S3_FILE_STORE_BUCKET_NAME:-onyx-file-store-bucket}
+    # $$ keeps the values for the container shell; they come from .env (env_file).
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        mc alias set mt http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
+        && mc mb --ignore-existing "mt/$$MT_BUCKET"

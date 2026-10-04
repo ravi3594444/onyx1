@@ -1,8 +1,18 @@
-# Multi-tenant validation stack
+# Multi-tenant stacks
 
-This folder holds the overlay for a second Onyx v4.8.4 stack with `MULTI_TENANT=true`. Use it
-for validation only. It runs on the development VM next to the live single-tenant stack and
-shares nothing with it.
+This folder holds two overlays for Onyx v4.8.4 with `MULTI_TENANT=true`:
+
+- `compose.saas.yml`: the application settings (api_server command, `MULTI_TENANT`, `AUTH_TYPE`,
+  EE, `DEV_MODE`, trial caps, `SIGNUP_RATE_LIMIT_ENABLED`, the `mt_minio_bucket` job, the nginx
+  `LEAVE_TEAM_GUARD`). No project name, no ports, no memory limits. Both stacks use it.
+- `compose.mt.yml`: the TEST stack specifics only: `name: onyx-mt`, the memory limits, the 1 GiB
+  OpenSearch heap and the loopback port `127.0.0.1:3200`.
+
+The TEST stack (project `onyx-mt`) runs on the development VM next to the live single-tenant
+stack and shares nothing with it. The PRODUCTION stack (project `onyx-saas`, `/srv/onyx-saas`)
+uses `compose.saas.yml` with `product/deploy/compose.https.yml` and takes over the public URL
+with the `cutover` action. See `docs/product/MULTI-TENANT.md`, section 6. The rest of this file
+is about the TEST stack.
 
 ## Isolation
 
@@ -10,11 +20,11 @@ shares nothing with it.
 | --- | --- | --- |
 | Folder | `/srv/onyx/deployment/docker_compose` | `/srv/onyx-mt/deployment/docker_compose` |
 | Compose project | `onyx` | `onyx-mt` (containers, network and volumes `onyx-mt_*`) |
-| Compose files | `docker-compose.yml`, `compose.override.yml`, `compose.https.yml` | `docker-compose.yml`, `compose.override.yml`, `compose.mt.yml` |
+| Compose files | `docker-compose.yml`, `compose.override.yml`, `compose.https.yml` | `docker-compose.yml`, `compose.override.yml`, `compose.saas.yml`, `compose.mt.yml` |
 | Published port | 80 and 443 | `127.0.0.1:3200` only |
 | `.env` | live secrets | new secrets from `make-env.sh`, `WEB_DOMAIN=http://localhost:3200` |
 
-`vm-bootstrap.sh` gives `-p onyx-mt` and the three `-f` files on each call. It also writes
+`vm-bootstrap.sh` gives `-p onyx-mt` and the four `-f` files on each call. It also writes
 `COMPOSE_PROJECT_NAME=onyx-mt` and `COMPOSE_FILE` into the multi-tenant `.env`, and
 `compose.mt.yml` sets `name: onyx-mt`. A plain `docker compose` in the multi-tenant folder then
 also addresses `onyx-mt`, never `onyx`. The script never copies the live `.env`. It stops if the
@@ -27,7 +37,7 @@ Run them with the workflow `axi-bootstrap-dev.yml` (input `action`), or on the V
 
 | Workflow action | Script call | What it does |
 | --- | --- | --- |
-| `mt-up` | `mt-up <sha>` | Checks memory, exports the release files and `compose.mt.yml`, writes `.env` once and checks it, pulls, starts, waits for `http://127.0.0.1:3200/api/health`, shows `ps`, `docker stats` and `free -m`. |
+| `mt-up` | `mt-up <sha>` | Checks memory, exports the release files, `compose.saas.yml` and `compose.mt.yml`, writes `.env` once and checks it, pulls, starts, waits for `http://127.0.0.1:3200/api/health`, shows `ps`, `docker stats` and `free -m`. |
 | `mt-check` | `mt-check <sha>` | Runs `product/test-corpus/mt_checks.py` against `http://127.0.0.1:3200`. |
 | `mt-check-after-restart` | `mt-check <sha> after-restart` | The same, with `--after-restart` (read checks only). |
 | `mt-restart` | `mt-restart <sha>` | `down` (without `-v`), `up -d`, health wait, volume comparison, then the after-restart checks. |
@@ -44,7 +54,7 @@ Files in `/srv/onyx-mt`, created once:
 - `mt_state.json`: the state of `mt_checks.py`. `mt-destroy` removes it, because the accounts
   and documents go with the volumes. `.env`, `mt-tag` and `mt-salt` stay.
 
-## Settings in compose.mt.yml
+## Settings in compose.saas.yml
 
 The base comes from the upstream overlay
 `deployment/docker_compose/docker-compose.multitenant.yml` at tag v4.8.4:
@@ -100,11 +110,11 @@ The VM has 6 vCPU and 15.6 GiB of RAM. The live stack uses about 7 GiB.
 
 - `mt-up` reads `MemAvailable` from `/proc/meminfo` and stops before any change when it is less
   than 6 GiB. It skips the check when `onyx-mt` runs already.
-- OpenSearch heap: 1 GiB (`OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g`; upstream fixes 2g in
-  `docker-compose.yml`, and Compose merges `environment` by key).
-- Indexing threads: `CELERY_WORKER_DOCPROCESSING_CONCURRENCY=2` (upstream 6).
+- OpenSearch heap: 1 GiB (`OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g` in `compose.mt.yml`; upstream
+  fixes 2g in `docker-compose.yml`, and Compose merges `environment` by key).
+- Indexing threads: `CELERY_WORKER_DOCPROCESSING_CONCURRENCY=2` (`compose.mt.yml`, upstream 6).
 - The code interpreter does not start (`compose.override.yml`).
-- Memory limits per container. A limit is a maximum, not a reservation. A container that
+- Memory limits per container (`compose.mt.yml`). A limit is a maximum, not a reservation. A container that
   goes above it stops, not a live container. Change a limit with the variable in the
   multi-tenant `.env`:
 
@@ -122,7 +132,9 @@ the VM. Stop the stack with `mt-down` when the validation ends.
 
 ## Web image and NEXT_PUBLIC_CLOUD_ENABLED
 
-The stack uses `ONYX_WEB_SERVER_IMAGE` from `product/deploy/release.env` (our GHCR build).
+The TEST stack uses `ONYX_WEB_SERVER_IMAGE` from `product/deploy/release.env` (our GHCR build).
+The PRODUCTION stack uses `ONYX_WEB_SERVER_IMAGE_CLOUD` from the same file: the build with
+`NEXT_PUBLIC_CLOUD_ENABLED=true`.
 
 In v4.8.4, `web/src/lib/constants.ts` reads `NEXT_PUBLIC_CLOUD_ENABLED` for
 `NEXT_PUBLIC_CLOUD_ENABLED` and `SERVER_SIDE_ONLY__CLOUD_ENABLED`. `web/Dockerfile` takes it as

@@ -7,6 +7,9 @@ name: Bootstrap dev VM
 # smtp: mail settings. The model and smtp actions read environment secrets.
 # mt-*: a separate multi-tenant validation stack (project onyx-mt, 127.0.0.1:3200).
 # mt-down keeps its volumes; mt-destroy removes them. See product/deploy/mt/README.md.
+# inventory, cutover, rollback, saas-*: the production multi-tenant stack (project onyx-saas)
+# on the public URL. See docs/product/MULTI-TENANT.md, section 6.
+# assistant-prompt, chat-check: default assistant prompt and chat checks on the live stack.
 # See product/deploy/RUNBOOK.md.
 
 on:
@@ -35,12 +38,21 @@ on:
           - mt-restart
           - mt-down
           - mt-destroy
+          - inventory
+          - cutover
+          - rollback
+          - saas-check
+          - saas-check-after-restart
+          - saas-restart
+          - saas-down
+          - assistant-prompt
+          - chat-check
       web_domain:
         description: Public URL of the stack (install only, for a new .env)
         type: string
         default: http://my-knowledge.duckdns.org
       letsencrypt_email:
-        description: Email for the Let's Encrypt account (https and https-staging only)
+        description: Email for the Let's Encrypt account (https, https-staging and cutover only)
         type: string
         default: ""
       owner_email:
@@ -64,6 +76,11 @@ on:
         description: Model id, or list to show the provider's matching models (model only)
         type: string
         default: list
+      assistant_mode:
+        description: Default assistant prompt (assistant-prompt only)
+        type: choice
+        default: show
+        options: [set, reset, show]
       sealed_model_key:
         description: Model key encrypted to the VM inbox key (base64; model only, when the secret MODEL_API_KEY is not set)
         type: string
@@ -101,6 +118,7 @@ jobs:
       MODEL_PROVIDER: ${{ inputs.model_provider }}
       MODEL_NAME: ${{ inputs.model_name }}
       SEALED_MODEL_KEY: ${{ inputs.sealed_model_key }}
+      ASSISTANT_MODE: ${{ inputs.assistant_mode }}
     steps:
       - name: Check the deploy secrets
         env:
@@ -223,6 +241,27 @@ jobs:
             mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
             mt-down) args="mt-down" ;;
             mt-destroy) args="mt-destroy" ;;
+            inventory) args="inventory ${GITHUB_SHA}" ;;
+            cutover)
+              # The value goes into the remote command line, so allow only a plain address.
+              if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+                echo "::error::Give letsencrypt_email for the cutover action."
+                exit 1
+              fi
+              args="cutover ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+              ;;
+            rollback) args="rollback ${GITHUB_SHA}" ;;
+            saas-check) args="saas-check ${GITHUB_SHA}" ;;
+            saas-check-after-restart) args="saas-check ${GITHUB_SHA} after-restart" ;;
+            saas-restart) args="saas-restart ${GITHUB_SHA}" ;;
+            saas-down) args="saas-down ${GITHUB_SHA}" ;;
+            assistant-prompt)
+              if [[ ! "${ASSISTANT_MODE}" =~ ^(set|reset|show)$ ]]; then
+                echo "::error::assistant_mode must be set, reset or show."; exit 1
+              fi
+              args="assistant-prompt ${GITHUB_SHA} ${ASSISTANT_MODE}"
+              ;;
+            chat-check) args="chat-check ${GITHUB_SHA}" ;;
             *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
           esac
           if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then

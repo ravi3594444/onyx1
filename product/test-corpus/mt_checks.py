@@ -377,7 +377,9 @@ def setup_data(
     state["user_file_a"] = upload_user_file(checks, owner_a, tag)
     model = model_settings()
     if model is None:
-        log("MODEL_API_KEY unset: the companies get no model; chat answer checks skipped")
+        log(
+            "MODEL_API_KEY unset: the companies get no model; chat answer checks skipped"
+        )
         state["model_configured"] = False
     else:
         state["model_configured"] = all(
@@ -433,7 +435,9 @@ def configure_company_model(
             }
         ],
     }
-    status, saved = owner.request("PUT", "/api/admin/llm/provider?is_creation=true", body)
+    status, saved = owner.request(
+        "PUT", "/api/admin/llm/provider?is_creation=true", body
+    )
     ok = status == 200 and isinstance(saved, dict) and "id" in saved
     checks.record(
         f"{label} creates the model provider {model['display_name']!r}",
@@ -447,15 +451,24 @@ def configure_company_model(
         "/api/admin/llm/default",
         {"provider_id": int(saved["id"]), "model_name": model["model"]},
     )
-    checks.record(f"{label} sets the model as default", status == 200, {"status": status})
+    checks.record(
+        f"{label} sets the model as default", status == 200, {"status": status}
+    )
     status, config = owner.request("GET", "/api/admin/default-assistant/configuration")
-    default_prompt = str((config or {}).get("default_system_prompt", "")) if status == 200 else ""
+    default_prompt = (
+        str((config or {}).get("default_system_prompt", "")) if status == 200 else ""
+    )
     prompt_ok = False
     if default_prompt:
         status, _ = owner.request(
             "PATCH",
             "/api/admin/default-assistant",
-            {"system_prompt": default_prompt.rstrip() + "\n\n" + ASSISTANT_ADDITION + "\n"},
+            {
+                "system_prompt": default_prompt.rstrip()
+                + "\n\n"
+                + ASSISTANT_ADDITION
+                + "\n"
+            },
         )
         prompt_ok = status == 200
     checks.record(

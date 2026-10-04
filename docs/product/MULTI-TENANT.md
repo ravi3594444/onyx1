@@ -164,3 +164,39 @@ Not covered by these runs: email delivery (no SMTP), the invite accept and deny 
 cloud web build (the stack ran the single-tenant branded image), billing pages, and the
 control-plane calls listed in `MULTI-TENANT-DEPENDENCIES.md`.
 
+## 6. Cutover of the public URL to the multi-tenant stack
+
+The production multi-tenant stack is Compose project `onyx-saas` in `/srv/onyx-saas`. It uses
+`compose.saas.yml` (application settings) and `compose.https.yml` (ports 80 and 443, the
+Let's Encrypt files). The live single-tenant project `onyx` keeps its folder `/srv/onyx` and
+its volumes `onyx_*`. Nothing deletes them. Run the steps with the workflow
+`axi-bootstrap-dev.yml` (input `action`). Each step keeps a log in `/srv/onyx/evidence/`.
+
+| Order | Action | What it does |
+| --- | --- | --- |
+| 1 | `inventory` | Read-only. Counts users, connectors, documents, chats, files, assistants, LLM providers and groups of the live stack. The log shows counts only. The emails and connector names go to `inventory.txt` (mode 600) in the evidence folder. Ends with the list of what needs recreation. |
+| 2 | `cutover` (needs `letsencrypt_email`) | Refuses when `onyx-saas` runs or the live stack is not healthy. Cold backup of the live stack into `/srv/backups/<time>-pre-cutover` with checksum check. Prepares `/srv/onyx-saas` with a new `.env` and the cloud web image, copies the certificate and the nginx redirect files, pulls the images. Then stops `onyx` (volumes stay), starts `onyx-saas`, waits for `https://my-knowledge.duckdns.org/api/health` and checks the redirect. On a failed start it stops `onyx-saas` and starts `onyx` again by itself. |
+| 3 | `saas-check` | Runs `mt_checks.py` against the public URL: two test companies, one invited member, documents, chats, separation. With `/srv/onyx/secrets/model.env` the company checks also configure the model. |
+| 4 | `saas-restart` | `down` without `-v`, `up -d`, health, redirect, volume comparison, then `saas-check-after-restart`. |
+| - | `rollback` | Stops `onyx-saas` (volumes stay) and starts `onyx` again. The old service is back in about 2 minutes. Refuses nothing except a missing live `.env`. |
+| - | `saas-down` | Stops `onyx-saas`. The public URL answers nothing until `cutover` or `rollback`. There is no destroy action for this stack. |
+
+The backup folder holds `db_volume.tar.gz`, `opensearch-data.tar.gz`, `minio_data.tar.gz`,
+`file-system.tar.gz`, `env.backup` (the live `.env`, with secrets) and `SHA256SUMS`. Copy it off
+the VM. `product/deploy/restore.sh` restores it into a fresh folder.
+
+Not migrated (section 2, option A): accounts and passwords, connectors and their documents,
+chats, uploaded files, the LLM provider and the settings. Every user signs up again. The first
+sign-up of an email creates its company and makes that user admin. Members join by invitation
+only. The old data stays in the `onyx_*` volumes and in the backup.
+
+Test accounts of `saas-check`: `owner-a-<tag>@example.com`, `owner-b-<tag>@example.com`,
+`member-a-<tag>@example.com` and `invitee-b-<tag>@example.com`. The tag is `saas-` plus 8 hex
+characters, stored in `/srv/onyx-saas/saas-tag` (the log shows it). The passwords derive from
+the salt in `/srv/onyx-saas/saas-salt` (mode 600, never printed). These accounts are two
+throwaway companies; they hold only the test documents.
+
+Rollback window: `rollback` returns the previous service with all its data. Companies created
+on `onyx-saas` after the cutover stay in the `onyx-saas_*` volumes and come back with the next
+`cutover`. Remove the `onyx_*` volumes only after a final backup and a decision to stay.
+
