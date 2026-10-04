@@ -262,4 +262,7 @@ The owner enabled Actions on 4 October 2026. Results of `axi-product-ci.yml` on 
   from the Onyx logs: the update step's prune still ran, and Onyx v4.8.4 then starts no prune
   for removed files ("Failed to trigger pruning", HTTP 200). The update step now waits for its
   prune. RUNBOOK section 7a tells operators how to handle this.
-- Run #11 (manual e2e, commit `b0d7ba6`): result below.
+- Run #11 (manual e2e, commit `b0d7ba6`): **passed**, 8 minutes in total
+  (https://github.com/ravi3594444/onyx1/actions/runs/37195235054). Stack start 2 min 42 s;
+  index, search, privacy, update and delete with `--skip-chat` 1 min 13 s; backup and isolated
+  restore 2 min 23 s; search on the restored copy 15 s.
