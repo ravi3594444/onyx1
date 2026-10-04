@@ -6,12 +6,18 @@ set -euo pipefail
 
 branding_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 base_url="${1:-http://localhost:3000}"
+case "${base_url}" in
+  https://* | http://localhost* | http://127.0.0.1*) ;;
+  *) echo "Use https, or http only for localhost: ${base_url}" >&2; exit 1 ;;
+esac
 cookie_jar="$(mktemp)"
 trap 'rm -f "${cookie_jar}"' EXIT
 
-curl -fsS -c "${cookie_jar}" -o /dev/null -X POST "${base_url}/api/auth/login" \
-  --data-urlencode "username=${ADMIN_EMAIL:?set ADMIN_EMAIL}" \
-  --data-urlencode "password=${ADMIN_PASSWORD:?set ADMIN_PASSWORD}"
+# The password goes through stdin so that it does not show in the process list.
+printf '%s' "${ADMIN_PASSWORD:?set ADMIN_PASSWORD}" |
+  curl -fsS -c "${cookie_jar}" -o /dev/null -X POST "${base_url}/api/auth/login" \
+    --data-urlencode "username=${ADMIN_EMAIL:?set ADMIN_EMAIL}" \
+    --data-urlencode "password@-"
 
 # Upload the logo first. The settings payload then turns on use_custom_logo.
 curl -fsS -b "${cookie_jar}" -o /dev/null -X PUT \
