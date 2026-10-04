@@ -1,0 +1,98 @@
+# Bootstrap dev VM run 24 (model (list)), commit 76a452e2da75cfa781831617fe34022b316d6db6, GitHub Actions job 111468920452
+# https://github.com/ravi3594444/onyx1/actions/runs/37213392040
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  keygen) args="keygen" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: model
+  WEB_DOMAIN: https://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  SEALED_MODEL_KEY: BSQ88+FCGtHIldxSU0Zc8NUJMznpAOLd1yFpR98tZQUR1ucYpuC02Rni/5NHZw/BKnFhaDyTntvNL9oi20gTV8CReoc3jTqjm9Wg6UsizCVe3yHuPVOlWmYZHoHw2hAs5SjDGuyLTLz0atFgNFBuFvp70dBqKGGo5iYRjWdfMmpG3HCLMsKh6u9Ivl6M2P3vASulzgQYp7+Q6TlsB+11VqOMrWk51LA0gua0vo+0flHTwCZ4DdAwvz3kUFvteZbbU+ssjVve+G8iPuF5i1EMAFOMZmwwd2XlgqRDKsjD2fUODEHCEQGZJhNlbfQaeli/db8f9+SQ9FNWAWK5a0TPkAal2ly8V1WvBiFMi62buTnuB9Mbs21iw6sbmuy8ceC/HiZLlBRVXoTC7Qb7IHUe06CrQB72vMSCGpr1TaQgPfTTO24gItzQFbEE7jZc/1zu+AQHog3RTfbHHiTkzfc/ihi6ojyGM9x142dtNDNwQeHKob2ITEBbJFrKuo5DN9wE
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T153259Z-model
+
+== vm-bootstrap model fireworks_ai list 76a452e2da75cfa781831617fe34022b316d6db6 2026-10-04T15:32:59Z ==
+
+== source at 76a452e2da75cfa781831617fe34022b316d6db6 ==
+76a452e2da75cfa781831617fe34022b316d6db6 2026-10-04T15:30:49+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': CI accepts the branded web image; sealed model key
+accounts/fireworks/models/deepseek-v4-pro
+accounts/fireworks/models/deepseek-v4-flash-0731
+accounts/fireworks/models/deepseek-v4-pro-0813
+accounts/fireworks/models/deepseek-v4-flash-vision-exp
+accounts/fireworks/models/deepseek-v4p1-flash

@@ -1,0 +1,326 @@
+# Bootstrap dev VM run 33 (mt-restart with the after-restart company checks), commit 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad, GitHub Actions job 111475615206
+# https://github.com/ravi3594444/onyx1/actions/runs/37215691688
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  keygen) args="keygen" ;;
+  mt-up) args="mt-up ${GITHUB_SHA}" ;;
+  mt-check) args="mt-check ${GITHUB_SHA}" ;;
+  mt-check-after-restart) args="mt-check ${GITHUB_SHA} after-restart" ;;
+  mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
+  mt-down) args="mt-down" ;;
+  mt-destroy) args="mt-destroy" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: mt-restart
+  WEB_DOMAIN: http://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  SEALED_MODEL_KEY:
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T160910Z-mt-restart
+
+== vm-bootstrap mt-restart 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad 2026-10-04T16:09:10Z ==
+http://127.0.0.1:3200/api/health answers 200.
+
+== source at 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad ==
+7fcdd63c52708ef11e9b1638f1792d3e9c6acbad 2026-10-04T15:44:45+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': multi-tenant stack, cloud web build, branding coverage
+
+== containers before ==
+onyx-mt-api_server-1 bd9fc20701be Up 7 minutes (healthy)
+onyx-mt-background-1 8671860170a7 Up 7 minutes
+onyx-mt-cache-1 2d1b445b2858 Up 7 minutes
+onyx-mt-indexing_model_server-1 6db01082cad9 Up 7 minutes (healthy)
+onyx-mt-inference_model_server-1 9f67426da566 Up 7 minutes (healthy)
+onyx-mt-minio-1 74b684651557 Up 7 minutes (healthy)
+onyx-mt-nginx-1 8341f005c69c Up 6 minutes (healthy)
+onyx-mt-opensearch-1 2f2327eb8ffb Up 7 minutes
+onyx-mt-relational_db-1 378c7fb63943 Up 7 minutes (healthy)
+onyx-mt-web_server-1 a50204a441a5 Up 7 minutes (healthy)
+
+== step down ==
+ Container onyx-mt-background-1 Stopping
+ Container onyx-mt-nginx-1 Stopping
+ Container onyx-mt-nginx-1 Stopped
+ Container onyx-mt-nginx-1 Removing
+ Container onyx-mt-background-1 Stopped
+ Container onyx-mt-background-1 Removing
+ Container onyx-mt-nginx-1 Removed
+ Container onyx-mt-web_server-1 Stopping
+ Container onyx-mt-web_server-1 Stopped
+ Container onyx-mt-web_server-1 Removing
+ Container onyx-mt-background-1 Removed
+ Container onyx-mt-indexing_model_server-1 Stopping
+ Container onyx-mt-web_server-1 Removed
+ Container onyx-mt-api_server-1 Stopping
+ Container onyx-mt-indexing_model_server-1 Stopped
+ Container onyx-mt-indexing_model_server-1 Removing
+ Container onyx-mt-indexing_model_server-1 Removed
+ Container onyx-mt-api_server-1 Stopped
+ Container onyx-mt-api_server-1 Removing
+ Container onyx-mt-api_server-1 Removed
+ Container onyx-mt-opensearch-1 Stopping
+ Container onyx-mt-inference_model_server-1 Stopping
+ Container onyx-mt-relational_db-1 Stopping
+ Container onyx-mt-cache-1 Stopping
+ Container onyx-mt-mt_minio_bucket-1 Stopping
+ Container onyx-mt-mt_minio_bucket-1 Stopped
+ Container onyx-mt-mt_minio_bucket-1 Removing
+ Container onyx-mt-mt_minio_bucket-1 Removed
+ Container onyx-mt-minio-1 Stopping
+ Container onyx-mt-minio-1 Stopped
+ Container onyx-mt-minio-1 Removing
+ Container onyx-mt-cache-1 Stopped
+ Container onyx-mt-cache-1 Removing
+ Container onyx-mt-minio-1 Removed
+ Container onyx-mt-cache-1 Removed
+ Container onyx-mt-relational_db-1 Stopped
+ Container onyx-mt-relational_db-1 Removing
+ Container onyx-mt-relational_db-1 Removed
+ Container onyx-mt-opensearch-1 Stopped
+ Container onyx-mt-opensearch-1 Removing
+ Container onyx-mt-opensearch-1 Removed
+ Container onyx-mt-inference_model_server-1 Stopped
+ Container onyx-mt-inference_model_server-1 Removing
+ Container onyx-mt-inference_model_server-1 Removed
+ Network onyx-mt_default Removing
+ Network onyx-mt_default Removed
+-- step down: exit 0
+
+== step up ==
+ Network onyx-mt_default Creating
+ Network onyx-mt_default Creating
+ Network onyx-mt_default Created
+ Network onyx-mt_default Created
+ Container onyx-mt-relational_db-1 Creating
+ Container onyx-mt-inference_model_server-1 Creating
+ Container onyx-mt-cache-1 Creating
+ Container onyx-mt-indexing_model_server-1 Creating
+ Container onyx-mt-opensearch-1 Creating
+ Container onyx-mt-minio-1 Creating
+ Container onyx-mt-opensearch-1 Created
+ Container onyx-mt-relational_db-1 Created
+ Container onyx-mt-minio-1 Created
+ Container onyx-mt-mt_minio_bucket-1 Creating
+ Container onyx-mt-cache-1 Created
+ Container onyx-mt-inference_model_server-1 Created
+ Container onyx-mt-indexing_model_server-1 Created
+ Container onyx-mt-background-1 Creating
+ Container onyx-mt-mt_minio_bucket-1 Created
+ Container onyx-mt-api_server-1 Creating
+ Container onyx-mt-background-1 Created
+ Container onyx-mt-api_server-1 Created
+ Container onyx-mt-web_server-1 Creating
+ Container onyx-mt-web_server-1 Created
+ Container onyx-mt-nginx-1 Creating
+ Container onyx-mt-nginx-1 Created
+ Container onyx-mt-opensearch-1 Starting
+ Container onyx-mt-relational_db-1 Starting
+ Container onyx-mt-indexing_model_server-1 Starting
+ Container onyx-mt-inference_model_server-1 Starting
+ Container onyx-mt-minio-1 Starting
+ Container onyx-mt-cache-1 Starting
+ Container onyx-mt-opensearch-1 Started
+ Container onyx-mt-relational_db-1 Started
+ Container onyx-mt-indexing_model_server-1 Started
+ Container onyx-mt-inference_model_server-1 Started
+ Container onyx-mt-minio-1 Started
+ Container onyx-mt-minio-1 Waiting
+ Container onyx-mt-cache-1 Started
+ Container onyx-mt-background-1 Starting
+ Container onyx-mt-background-1 Started
+ Container onyx-mt-minio-1 Healthy
+ Container onyx-mt-mt_minio_bucket-1 Starting
+ Container onyx-mt-mt_minio_bucket-1 Started
+ Container onyx-mt-mt_minio_bucket-1 Waiting
+ Container onyx-mt-mt_minio_bucket-1 Exited
+ Container onyx-mt-api_server-1 Starting
+ Container onyx-mt-api_server-1 Started
+ Container onyx-mt-web_server-1 Starting
+ Container onyx-mt-web_server-1 Started
+ Container onyx-mt-web_server-1 Waiting
+ Container onyx-mt-api_server-1 Waiting
+ Container onyx-mt-web_server-1 Healthy
+ Container onyx-mt-api_server-1 Healthy
+ Container onyx-mt-nginx-1 Starting
+ Container onyx-mt-nginx-1 Started
+-- step up: exit 0
+
+== step health ==
+http://127.0.0.1:3200/api/health answers 200.
+-- step health: exit 0
+
+== containers after ==
+onyx-mt-api_server-1 7ec9b4b87736 Up 46 seconds (healthy)
+onyx-mt-background-1 40fbfc1f0445 Up About a minute
+onyx-mt-cache-1 4f14f6070109 Up About a minute
+onyx-mt-indexing_model_server-1 1a86996995c2 Up About a minute (healthy)
+onyx-mt-inference_model_server-1 5d8acfde6867 Up About a minute (healthy)
+onyx-mt-minio-1 fe0f3c8ff537 Up About a minute (healthy)
+onyx-mt-nginx-1 746cd0c2e45f Up 10 seconds (healthy)
+onyx-mt-opensearch-1 f3bf3a50fdd7 Up About a minute
+onyx-mt-relational_db-1 8da616842ec5 Up About a minute (healthy)
+onyx-mt-web_server-1 a114ac314520 Up 46 seconds (healthy)
+volumes: onyx-mt_api_server_logs onyx-mt_background_logs onyx-mt_db_volume onyx-mt_file-system onyx-mt_indexing_huggingface_model_cache onyx-mt_indexing_model_server_logs onyx-mt_inference_model_server_logs onyx-mt_minio_data onyx-mt_model_cache_huggingface onyx-mt_opensearch-data
+
+== step volumes-kept ==
+-- step volumes-kept: exit 0
+
+== step mt-check-after-restart ==
+Tag: mt-775b7965
+PASS owner A keeps workspace and admin capability after restart: {"email": "owner-a-mt-775b7965@example.com", "team_name": "tenant_586958a3-344c-4901-a81c-cd225e6eab95", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS owner B keeps workspace and admin capability after restart: {"email": "owner-b-mt-775b7965@example.com", "team_name": "tenant_a5cdf564-b044-43a3-9235-bafc3b99d5f5", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS member A is in workspace A without admin capability after restart: {"email": "member-a-mt-775b7965@example.com", "team_name": "tenant_586958a3-344c-4901-a81c-cd225e6eab95", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["basic", "generate:image", "read:chat", "read:search", "use:llm_gateway", "write:chat"]}
+PASS member A gets 403 on /api/manage/users/accepted?page_num=0&page_size=1000 after restart: {"status": 403, "body": {"error_code": "INSUFFICIENT_PERMISSIONS", "detail": "You do not have the required permissions for this action."}}
+PASS owner A user list shows owner A and member A and not owner B after restart: {"status": 200, "emails": ["owner-a-mt-775b7965@example.com", "member-a-mt-775b7965@example.com"]}
+PASS owner B user list shows owner B and not owner A or member A after restart: {"status": 200, "emails": ["owner-b-mt-775b7965@example.com"]}
+PASS owner A search finds expense-policy.md after restart: {"titles": ["expense-policy.md", "expense-policy.md"]}
+PASS owner A search does not find refund-policy-2026.md after restart: {"titles": ["expense-policy.md", "expense-policy.md"]}
+PASS member A search finds expense-policy.md after restart: {"titles": ["expense-policy.md"]}
+PASS member A search does not find refund-policy-2026.md after restart: {"titles": ["expense-policy.md"]}
+PASS owner B search finds refund-policy-2026.md after restart: {"titles": ["refund-policy-2026.md"]}
+PASS owner B search does not find expense-policy.md after restart: {"titles": ["refund-policy-2026.md"]}
+PASS owner A reads own chat session after restart: {"status": 200}
+PASS owner B cannot read owner A chat session after restart: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "Chat session not found"}}
+PASS member A cannot read owner A chat session after restart: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS owner A connector list shows own connector and not B's after restart: {"status": 200, "names": ["MT connector A mt-775b7965"]}
+PASS owner B connector list shows own connector and not A's after restart: {"status": 200, "names": ["MT connector B mt-775b7965"]}
+PASS owner A persona list shows own persona after restart: {"status": 200, "names": ["Assistant", "MT persona A mt-775b7965"]}
+PASS owner B persona list lacks owner A persona after restart: {"status": 200, "names": ["Assistant"]}
+PASS owner B cannot read owner A persona by id after restart: {"status": 404, "name": null}
+PASS member A sees owner A persona only when it is public after restart: {"status": 200, "is_public": true, "visible": true}
+PASS owner A reads own user file after restart: {"status": 200}
+PASS owner B cannot read owner A user file after restart: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "File not found"}}
+PASS owner B file status lookup hides owner A user file after restart: {"status": 200, "body": []}
+PASS member A cannot read owner A user file after restart: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "File not found"}}
+PASS member A file status lookup hides owner A user file after restart: {"status": 200, "body": []}
+PASS owner B project list lacks owner A project after restart: {"status": 200, "names": [], "project_id_a": 1}
+PASS owner A PAT gives owner A /api/me and workspace after restart: {"status": 200, "email": "owner-a-mt-775b7965@example.com", "team_name": "tenant_586958a3-344c-4901-a81c-cd225e6eab95", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS owner A PAT search finds expense-policy.md and not refund-policy-2026.md after restart: {"status": 200, "status_b": 200, "own_titles": ["expense-policy.md", "expense-policy.md"], "other_titles": ["expense-policy.md", "expense-policy.md"]}
+PAT deleted: {"status": 200}
+PASS step mt-after-restart: 29 checks passed
+-- step mt-check-after-restart: exit 0
+
+== docker compose ps (onyx-mt) ==
+NAME                               IMAGE                                                                                                                                   COMMAND                  SERVICE                  CREATED              STATUS                        PORTS
+onyx-mt-api_server-1               onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd                                  "/bin/sh -c 'alembic…"   api_server               About a minute ago   Up About a minute (healthy)
+onyx-mt-background-1               onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd                                  "/bin/sh -c ' if [ -…"   background               About a minute ago   Up About a minute
+onyx-mt-cache-1                    docker.io/library/redis:7.4-alpine                                                                                                      "docker-entrypoint.s…"   cache                    About a minute ago   Up About a minute             6379/tcp
+onyx-mt-indexing_model_server-1    onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   indexing_model_server    About a minute ago   Up About a minute (healthy)
+onyx-mt-inference_model_server-1   onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   inference_model_server   About a minute ago   Up About a minute (healthy)
+onyx-mt-minio-1                    docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5   "/usr/bin/docker-ent…"   minio                    About a minute ago   Up About a minute (healthy)   9000/tcp
+onyx-mt-nginx-1                    docker.io/library/nginx:1.25.5-alpine                                                                                                   "/docker-entrypoint.…"   nginx                    About a minute ago   Up 32 seconds (healthy)       127.0.0.1:3200->80/tcp
+onyx-mt-opensearch-1               docker.io/opensearchproject/opensearch:3.6.0                                                                                            "./opensearch-docker…"   opensearch               About a minute ago   Up About a minute             9200/tcp, 9300/tcp, 9600/tcp, 9650/tcp
+onyx-mt-relational_db-1            docker.io/library/postgres:15.2-alpine                                                                                                  "docker-entrypoint.s…"   relational_db            About a minute ago   Up About a minute (healthy)   5432/tcp
+onyx-mt-web_server-1               ghcr.io/ravi3594444/onyx1/onyx-web-server:v4.8.4-axi.1@sha256:055acb433b07ae35355395baf7142c5a3a07ac3b73eaf029e44aff3ac105ed43          "docker-entrypoint.s…"   web_server               About a minute ago   Up About a minute (healthy)
+
+== docker stats ==
+CONTAINER ID   NAME                               CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O         PIDS
+746cd0c2e45f   onyx-mt-nginx-1                    0.00%     7.531MiB / 15.61GiB   0.05%     97.5kB / 106kB    1.19MB / 61.4kB   10
+a114ac314520   onyx-mt-web_server-1               0.16%     82.41MiB / 1GiB       8.05%     2.55kB / 1.71kB   12MB / 0B         11
+7ec9b4b87736   onyx-mt-api_server-1               0.25%     620MiB / 2GiB         30.28%    564kB / 1.12MB    48.4MB / 102MB    11
+40fbfc1f0445   onyx-mt-background-1               1.99%     1.744GiB / 4GiB       43.59%    1.93MB / 798kB    82.3MB / 85.6MB   60
+5d8acfde6867   onyx-mt-inference_model_server-1   0.21%     670.8MiB / 3GiB       21.84%    167kB / 72.6kB    41.5MB / 74.5MB   20
+1a86996995c2   onyx-mt-indexing_model_server-1    0.21%     365.6MiB / 3GiB       11.90%    2.81kB / 126B     37.9MB / 28.9MB   9
+4f14f6070109   onyx-mt-cache-1                    0.63%     7.555MiB / 15.61GiB   0.05%     788kB / 1.91MB    3.66MB / 0B       6
+fe0f3c8ff537   onyx-mt-minio-1                    0.00%     216.4MiB / 15.61GiB   1.35%     10.4kB / 6.83kB   52MB / 81.9kB     11
+8da616842ec5   onyx-mt-relational_db-1            0.06%     170.6MiB / 2GiB       8.33%     860kB / 387kB     9.11MB / 414kB    56
+f3bf3a50fdd7   onyx-mt-opensearch-1               1.42%     1.568GiB / 2GiB       78.41%    201kB / 78.7kB    199MB / 15.8MB    99
+9535682d1b19   onyx-nginx-1                       0.00%     6.91MiB / 15.61GiB    0.04%     6.15kB / 12.2kB   24.6kB / 36.9kB   10
+48333d043ff2   onyx-web_server-1                  0.00%     109.7MiB / 15.61GiB   0.69%     22.9kB / 15.4kB   434kB / 0B        11
+ba1e66540243   onyx-api_server-1                  0.18%     578.3MiB / 15.61GiB   3.62%     176kB / 171kB     2.11MB / 180kB    10
+52cc99d03436   onyx-background-1                  4.13%     1.865GiB / 15.61GiB   11.95%    26.2MB / 12.8MB   582kB / 1.12MB    66
+cd12d649d9e3   onyx-inference_model_server-1      0.23%     314.8MiB / 15.61GiB   1.97%     2.95kB / 126B     4.25MB / 0B       9
+364480354eb7   onyx-indexing_model_server-1       0.21%     310.9MiB / 15.61GiB   1.94%     2.76kB / 126B     561kB / 0B        9
+250a83400e1b   onyx-minio-1                       0.02%     218.2MiB / 15.61GiB   1.36%     9.8kB / 5.32kB    1.72MB / 721kB    12
+a296a628a05d   onyx-relational_db-1               0.00%     117.4MiB / 15.61GiB   0.73%     2.88MB / 2.57MB   938kB / 418kB     60
+abb5a56e092c   onyx-cache-1                       0.81%     4.352MiB / 15.61GiB   0.03%     9.76MB / 23.3MB   0B / 0B           6
+2cfe5dc8865b   onyx-certbot-1                     0.00%     1.59MiB / 15.61GiB    0.01%     2.91kB / 126B     0B / 4.1kB        2
+6ccdb655e49a   onyx-opensearch-1                  1.01%     2.558GiB / 15.61GiB   16.38%    40.4kB / 31kB     1.87MB / 16.5MB   86
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989       12009         311          50        3668        3416
+Swap:              0           0           0
+
+== summary ==
+step             exit code
+down             0
+up               0
+health           0
+volumes-kept     0
+mt-check-after-restart 0
+RESULT: PASS (all steps exited with 0)

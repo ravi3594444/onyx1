@@ -1,0 +1,279 @@
+# Bootstrap dev VM run 31 (mt-up (isolated multi-tenant stack)), commit 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad, GitHub Actions job 111474189476
+# https://github.com/ravi3594444/onyx1/actions/runs/37215206003
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  keygen) args="keygen" ;;
+  mt-up) args="mt-up ${GITHUB_SHA}" ;;
+  mt-check) args="mt-check ${GITHUB_SHA}" ;;
+  mt-check-after-restart) args="mt-check ${GITHUB_SHA} after-restart" ;;
+  mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
+  mt-down) args="mt-down" ;;
+  mt-destroy) args="mt-destroy" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: mt-up
+  WEB_DOMAIN: http://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  SEALED_MODEL_KEY:
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T160129Z-mt-up
+
+== vm-bootstrap mt-up 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad 2026-10-04T16:01:29Z ==
+
+== memory before start ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989        6522        4520          23        4947        8948
+Swap:              0           0           0
+MemAvailable: 8948 MiB. mt-up needs 6144 MiB.
+
+== multi-tenant folder /srv/onyx-mt ==
+
+== source at 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad ==
+7fcdd63c52708ef11e9b1638f1792d3e9c6acbad 2026-10-04T15:44:45+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': multi-tenant stack, cloud web build, branding coverage
+
+== release files v4.8.4 into /srv/onyx-mt/deployment/docker_compose ==
+Exported v4.8.4 (d15d4451607965e0e349aad231f858596e85ea52) and compose.override.yml.
+Exported compose.mt.yml.
+Created /srv/onyx-mt/deployment/docker_compose/.env for Onyx v4.8.4. Keep a secure copy of it.
+Set COMPOSE_PROJECT_NAME and COMPOSE_FILE in /srv/onyx-mt/deployment/docker_compose/.env.
+Wrote DB_READONLY_PASSWORD into /srv/onyx-mt/deployment/docker_compose/.env (value not shown).
+USER_AUTH_SECRET, DB_READONLY_USER and DB_READONLY_PASSWORD are set (values not shown).
+
+== docker compose -p onyx-mt pull ==
+ Image docker.io/library/postgres:15.2-alpine Pulling
+ Image docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5 Pulling
+ Image docker.io/opensearchproject/opensearch:3.6.0 Pulling
+ Image onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850 Pulling
+ Image ghcr.io/ravi3594444/onyx1/onyx-web-server:v4.8.4-axi.1@sha256:055acb433b07ae35355395baf7142c5a3a07ac3b73eaf029e44aff3ac105ed43 Pulling
+ Image docker.io/library/redis:7.4-alpine Pulling
+ Image docker.io/library/nginx:1.25.5-alpine Pulling
+ Image onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd Pulling
+ Image ghcr.io/ravi3594444/onyx1/onyx-web-server:v4.8.4-axi.1@sha256:055acb433b07ae35355395baf7142c5a3a07ac3b73eaf029e44aff3ac105ed43 Pulled
+ Image docker.io/opensearchproject/opensearch:3.6.0 Pulled
+ Image docker.io/library/postgres:15.2-alpine Pulled
+ Image docker.io/library/redis:7.4-alpine Pulled
+ Image docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5 Pulled
+ Image docker.io/library/nginx:1.25.5-alpine Pulled
+ Image onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850 Pulled
+ Image onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd Pulled
+
+== docker compose -p onyx-mt up -d ==
+ Volume onyx-mt_indexing_model_server_logs Creating
+ Volume onyx-mt_indexing_model_server_logs Creating
+ Volume onyx-mt_indexing_huggingface_model_cache Creating
+ Volume onyx-mt_indexing_huggingface_model_cache Creating
+ Volume onyx-mt_background_logs Creating
+ Volume onyx-mt_background_logs Creating
+ Network onyx-mt_default Creating
+ Network onyx-mt_default Creating
+ Volume onyx-mt_inference_model_server_logs Creating
+ Volume onyx-mt_inference_model_server_logs Creating
+ Volume onyx-mt_db_volume Creating
+ Volume onyx-mt_db_volume Creating
+ Volume onyx-mt_file-system Creating
+ Volume onyx-mt_file-system Creating
+ Volume onyx-mt_minio_data Creating
+ Volume onyx-mt_minio_data Creating
+ Volume onyx-mt_api_server_logs Creating
+ Volume onyx-mt_api_server_logs Creating
+ Volume onyx-mt_model_cache_huggingface Creating
+ Volume onyx-mt_model_cache_huggingface Creating
+ Volume onyx-mt_opensearch-data Creating
+ Volume onyx-mt_opensearch-data Creating
+ Volume onyx-mt_indexing_model_server_logs Created
+ Volume onyx-mt_indexing_model_server_logs Created
+ Volume onyx-mt_db_volume Created
+ Volume onyx-mt_db_volume Created
+ Volume onyx-mt_inference_model_server_logs Created
+ Volume onyx-mt_inference_model_server_logs Created
+ Volume onyx-mt_indexing_huggingface_model_cache Created
+ Volume onyx-mt_indexing_huggingface_model_cache Created
+ Volume onyx-mt_background_logs Created
+ Volume onyx-mt_background_logs Created
+ Volume onyx-mt_api_server_logs Created
+ Volume onyx-mt_api_server_logs Created
+ Volume onyx-mt_file-system Created
+ Volume onyx-mt_file-system Created
+ Volume onyx-mt_minio_data Created
+ Volume onyx-mt_minio_data Created
+ Volume onyx-mt_model_cache_huggingface Created
+ Volume onyx-mt_model_cache_huggingface Created
+ Volume onyx-mt_opensearch-data Created
+ Volume onyx-mt_opensearch-data Created
+ Network onyx-mt_default Created
+ Network onyx-mt_default Created
+ Container onyx-mt-relational_db-1 Creating
+ Container onyx-mt-indexing_model_server-1 Creating
+ Container onyx-mt-cache-1 Creating
+ Container onyx-mt-opensearch-1 Creating
+ Container onyx-mt-minio-1 Creating
+ Container onyx-mt-inference_model_server-1 Creating
+ Container onyx-mt-minio-1 Created
+ Container onyx-mt-mt_minio_bucket-1 Creating
+ Container onyx-mt-opensearch-1 Created
+ Container onyx-mt-relational_db-1 Created
+ Container onyx-mt-cache-1 Created
+ Container onyx-mt-indexing_model_server-1 Created
+ Container onyx-mt-inference_model_server-1 Created
+ Container onyx-mt-background-1 Creating
+ Container onyx-mt-mt_minio_bucket-1 Created
+ Container onyx-mt-api_server-1 Creating
+ Container onyx-mt-background-1 Created
+ Container onyx-mt-api_server-1 Created
+ Container onyx-mt-web_server-1 Creating
+ Container onyx-mt-web_server-1 Created
+ Container onyx-mt-nginx-1 Creating
+ Container onyx-mt-nginx-1 Created
+ Container onyx-mt-relational_db-1 Starting
+ Container onyx-mt-indexing_model_server-1 Starting
+ Container onyx-mt-opensearch-1 Starting
+ Container onyx-mt-minio-1 Starting
+ Container onyx-mt-cache-1 Starting
+ Container onyx-mt-inference_model_server-1 Starting
+ Container onyx-mt-relational_db-1 Started
+ Container onyx-mt-indexing_model_server-1 Started
+ Container onyx-mt-opensearch-1 Started
+ Container onyx-mt-minio-1 Started
+ Container onyx-mt-minio-1 Waiting
+ Container onyx-mt-cache-1 Started
+ Container onyx-mt-inference_model_server-1 Started
+ Container onyx-mt-background-1 Starting
+ Container onyx-mt-background-1 Started
+ Container onyx-mt-minio-1 Healthy
+ Container onyx-mt-mt_minio_bucket-1 Starting
+ Container onyx-mt-mt_minio_bucket-1 Started
+ Container onyx-mt-mt_minio_bucket-1 Waiting
+ Container onyx-mt-mt_minio_bucket-1 Exited
+ Container onyx-mt-api_server-1 Starting
+ Container onyx-mt-api_server-1 Started
+ Container onyx-mt-web_server-1 Starting
+ Container onyx-mt-web_server-1 Started
+ Container onyx-mt-web_server-1 Waiting
+ Container onyx-mt-api_server-1 Waiting
+ Container onyx-mt-web_server-1 Healthy
+ Container onyx-mt-api_server-1 Healthy
+ Container onyx-mt-nginx-1 Starting
+ Container onyx-mt-nginx-1 Started
+http://127.0.0.1:3200/api/health answers 200.
+
+== file store bucket job ==
+Bucket created successfully `mt/onyx-file-store-bucket`.
+
+== docker compose ps (onyx-mt) ==
+NAME                               IMAGE                                                                                                                                   COMMAND                  SERVICE                  CREATED              STATUS                        PORTS
+onyx-mt-api_server-1               onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd                                  "/bin/sh -c 'alembic…"   api_server               About a minute ago   Up 52 seconds (healthy)
+onyx-mt-background-1               onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd                                  "/bin/sh -c ' if [ -…"   background               About a minute ago   Up About a minute
+onyx-mt-cache-1                    docker.io/library/redis:7.4-alpine                                                                                                      "docker-entrypoint.s…"   cache                    About a minute ago   Up About a minute             6379/tcp
+onyx-mt-indexing_model_server-1    onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   indexing_model_server    About a minute ago   Up About a minute (healthy)
+onyx-mt-inference_model_server-1   onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   inference_model_server   About a minute ago   Up About a minute (healthy)
+onyx-mt-minio-1                    docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5   "/usr/bin/docker-ent…"   minio                    About a minute ago   Up About a minute (healthy)   9000/tcp
+onyx-mt-nginx-1                    docker.io/library/nginx:1.25.5-alpine                                                                                                   "/docker-entrypoint.…"   nginx                    About a minute ago   Up 10 seconds (healthy)       127.0.0.1:3200->80/tcp
+onyx-mt-opensearch-1               docker.io/opensearchproject/opensearch:3.6.0                                                                                            "./opensearch-docker…"   opensearch               About a minute ago   Up About a minute             9200/tcp, 9300/tcp, 9600/tcp, 9650/tcp
+onyx-mt-relational_db-1            docker.io/library/postgres:15.2-alpine                                                                                                  "docker-entrypoint.s…"   relational_db            About a minute ago   Up About a minute (healthy)   5432/tcp
+onyx-mt-web_server-1               ghcr.io/ravi3594444/onyx1/onyx-web-server:v4.8.4-axi.1@sha256:055acb433b07ae35355395baf7142c5a3a07ac3b73eaf029e44aff3ac105ed43          "docker-entrypoint.s…"   web_server               About a minute ago   Up 52 seconds (healthy)
+
+== docker stats ==
+CONTAINER ID   NAME                               CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O         PIDS
+8341f005c69c   onyx-mt-nginx-1                    0.00%     6.258MiB / 15.61GiB   0.04%     1.87kB / 1.53kB   106kB / 61.4kB    10
+a50204a441a5   onyx-mt-web_server-1               0.00%     78.01MiB / 1GiB       7.62%     1.49kB / 442B     0B / 0B           11
+bd9fc20701be   onyx-mt-api_server-1               0.19%     593.6MiB / 2GiB       28.98%    89.8kB / 95.5kB   56.9MB / 74.3MB   9
+8671860170a7   onyx-mt-background-1               5.31%     1.757GiB / 4GiB       43.92%    1.47MB / 644kB    5.23MB / 89.8MB   60
+9f67426da566   onyx-mt-inference_model_server-1   0.19%     354.1MiB / 3GiB       11.53%    2.29kB / 126B     8.19kB / 577MB    9
+6db01082cad9   onyx-mt-indexing_model_server-1    0.18%     354.4MiB / 3GiB       11.54%    2.61kB / 126B     0B / 577MB        9
+2d1b445b2858   onyx-mt-cache-1                    1.11%     4.098MiB / 15.61GiB   0.03%     595kB / 1.42MB    0B / 0B           6
+74b684651557   onyx-mt-minio-1                    0.02%     209.7MiB / 15.61GiB   1.31%     10.3kB / 6.42kB   36.9kB / 86kB     11
+378c7fb63943   onyx-mt-relational_db-1            0.02%     121.9MiB / 2GiB       5.95%     113kB / 104kB     10.9MB / 42MB     56
+2f2327eb8ffb   onyx-mt-opensearch-1               2.14%     1.529GiB / 2GiB       76.44%    38.7kB / 32.5kB   37.1MB / 16.7MB   88
+9535682d1b19   onyx-nginx-1                       0.00%     6.871MiB / 15.61GiB   0.04%     4.97kB / 11.4kB   0B / 36.9kB       10
+48333d043ff2   onyx-web_server-1                  0.00%     103.6MiB / 15.61GiB   0.65%     5.98kB / 3.25kB   0B / 0B           11
+ba1e66540243   onyx-api_server-1                  0.18%     592.8MiB / 15.61GiB   3.71%     129kB / 128kB     53.2kB / 32.8kB   10
+52cc99d03436   onyx-background-1                  1.80%     1.841GiB / 15.61GiB   11.79%    5.84MB / 2.98MB   0B / 430kB        66
+cd12d649d9e3   onyx-inference_model_server-1      0.18%     319.7MiB / 15.61GiB   2.00%     2.7kB / 126B      729kB / 0B        9
+364480354eb7   onyx-indexing_model_server-1       0.18%     319.7MiB / 15.61GiB   2.00%     2.5kB / 126B      20.5kB / 0B       9
+250a83400e1b   onyx-minio-1                       0.00%     216.2MiB / 15.61GiB   1.35%     9.54kB / 5.32kB   356kB / 197kB     11
+a296a628a05d   onyx-relational_db-1               0.00%     116.1MiB / 15.61GiB   0.73%     741kB / 667kB     164kB / 414kB     60
+abb5a56e092c   onyx-cache-1                       0.61%     4.305MiB / 15.61GiB   0.03%     2.32MB / 5.25MB   0B / 0B           6
+2cfe5dc8865b   onyx-certbot-1                     0.00%     1.59MiB / 15.61GiB    0.01%     2.66kB / 126B     0B / 4.1kB        2
+6ccdb655e49a   onyx-opensearch-1                  1.24%     2.549GiB / 15.61GiB   16.33%    40.1kB / 31kB     4.1kB / 15.7MB    79
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989       11475         326          46        4187        3972
+Swap:              0           0           0
+
+== mt-up complete: 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad with v4.8.4 at http://127.0.0.1:3200 ==

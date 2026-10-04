@@ -1,0 +1,30 @@
+# Live branding check of https://my-knowledge.duckdns.org, 2026-10-04T15:46:17Z
+# Fetched from the sandbox through its egress proxy (python urllib, GET, no login).
+
+/auth/login: HTTP 200, 388976 bytes, final URL https://my-knowledge.duckdns.org/auth/login
+  <title>: ['22nd X AI']
+  '22nd X AI': 2 occurrence(s)
+  'More growth. Less busywork.': 1 occurrence(s)
+  'Sign in to continue': 1 occurrence(s)
+  'Powered by Onyx': 1 occurrence(s)
+  'onyx.ico': 2 occurrence(s)
+  'axi-logo.png': 0 occurrence(s)
+  'BrandMark': 0 occurrence(s)
+/auth/signup: HTTP 200, 391674 bytes, final URL https://my-knowledge.duckdns.org/auth/signup
+  <title>: ['22nd X AI']
+  '22nd X AI': 3 occurrence(s)
+  'More growth. Less busywork.': 1 occurrence(s)
+  'Sign in to continue': 1 occurrence(s)
+  'Powered by Onyx': 1 occurrence(s)
+  'onyx.ico': 2 occurrence(s)
+  'axi-logo.png': 0 occurrence(s)
+  'BrandMark': 0 occurrence(s)
+/: HTTP 200, 385660 bytes, final URL https://my-knowledge.duckdns.org/
+  <title>: ['22nd X AI']
+  '22nd X AI': 2 occurrence(s)
+  'More growth. Less busywork.': 1 occurrence(s)
+  'Sign in to continue': 1 occurrence(s)
+  'Powered by Onyx': 1 occurrence(s)
+  'onyx.ico': 2 occurrence(s)
+  'axi-logo.png': 0 occurrence(s)
+  'BrandMark': 0 occurrence(s)

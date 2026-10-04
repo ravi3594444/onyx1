@@ -1,0 +1,444 @@
+# Bootstrap dev VM run 22 (verify over HTTPS, invite-only on), commit 63fb7d027ed15e8a41b442231857a75ceedf8dfd, GitHub Actions job 111458258003
+# https://github.com/ravi3594444/onyx1/actions/runs/37209724128
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: verify
+  WEB_DOMAIN: https://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T143405Z
+
+== vm-bootstrap verify 63fb7d027ed15e8a41b442231857a75ceedf8dfd 2026-10-04T14:34:05Z (with_chat=0) ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+
+== source at 63fb7d027ed15e8a41b442231857a75ceedf8dfd ==
+63fb7d027ed15e8a41b442231857a75ceedf8dfd 2026-10-04T14:33:38+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': verify with invite-only sign-up
+
+== test users ==
+admin@example.com: sign-up is invite-only (403), the account must exist already.
+user-a@example.com: sign-up is invite-only (403), the account must exist already.
+user-b@example.com: sign-up is invite-only (403), the account must exist already.
+admin@example.com has the admin capability.
+
+== step public-url ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+-- certificate
+issuer=C = US, O = Let's Encrypt, CN = YE1
+subject=CN = my-knowledge.duckdns.org
+notAfter=Jan  2 11:55:30 2027 GMT
+http://my-knowledge.duckdns.org/ redirects (301).
+-- step public-url: exit 0
+
+== step cleanup ==
+deleting connector 'Prune race corpus 20261004T134208Z' (cc-pair 5, {"connector_id": 4, "credential_id": 4})
+deleting connector 'PRD test corpus' (cc-pair 4, {"connector_id": 3, "credential_id": 3})
+connector 'Prune race corpus 20261004T134208Z' (cc-pair 5) is deleted
+connector 'PRD test corpus' (cc-pair 4) is deleted
+deleted project 'HR private' (2)
+project onyx-restore has no containers and no volumes
+-- step cleanup: exit 0
+
+== step index ==
+PASS new index attempt on cc-pair 6 indexes 4 documents: {"seconds": 41.0, "timeout_seconds": 900, "attempt_id": 7, "status": "success", "indexing": false, "num_docs_indexed": 4}
+index: {"cc_pair_id": 6, "documents": 4, "seconds_upload_to_indexed": 41.2, "seconds_waiting_for_indexing": 41.0}
+PASS hr-salary-bands-restricted.md in user B project reaches COMPLETED: {"owner": "user-b@example.com", "project_id": 3, "statuses": ["COMPLETED"], "seconds": 5.1}
+PASS step index: 2 checks passed
+-- step index: exit 0
+
+== step search ==
+PASS search Q1 as user-a@example.com: {"expected_top": "expense-policy.md", "seconds": 0.1, "top_titles": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md", "refund-policy-2025.md"]}
+PASS search Q2 as user-a@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.1, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q3 as user-a@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.11, "top_titles": ["refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q4 as user-a@example.com: {"expected_top": null, "seconds": 0.09, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q5 as user-a@example.com: {"expected_top": null, "seconds": 0.09, "top_titles": ["expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner user-b@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from user-a@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+-- step search: exit 0
+
+== step privacy ==
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 3, "name": "HR private", "description": null, "created_at": "2026-10-04T14:35:06.102394Z", "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "instructions": null, "chat_sessions": []}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "23d78888-4b42-4768-bcb4-417cdb3f5c31", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "file_id": "7cfa9272-56b9-433a-a890-b0d0cdcbd397", "created_at": "2026-10-04T14:35:06.445111", "status": "COMPLETED", "last_accessed_at": "2026-10-04T14:35:06.443471Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 0, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file 23d78888-4b42-4768-bcb4-417cdb3f5c31: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+-- step privacy: exit 0
+
+== step update ==
+PASS new index attempt on cc-pair 6 indexes 4 documents: {"seconds": 20.5, "timeout_seconds": 900, "attempt_id": 8, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS prune after the update removes the old version: {"seconds": 0.0, "timeout_seconds": 900, "before": null, "last_pruned": "2026-10-04T14:35:20.860718Z"}
+update applied: {"seconds": 20.7}
+PASS search shows the new support hours and not the old ones: {"new_hours_found": true, "old_hours_found": false}
+SKIP chat Q2 after update: "--skip-chat: no model answer"
+PASS step update: 3 checks passed, 1 skipped
+-- step update: exit 0
+
+== step delete ==
+PASS search finds refund-policy-2025.md before deletion: {"titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS deletion of refund-policy-2025.md reaches search: {"seconds": 5.2, "timeout_seconds": 900, "titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides refund-policy-2025.md and shows refund-policy-2026.md: {"titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+SKIP chat Q3 after deletion: "--skip-chat: no model answer"
+PASS step delete: 3 checks passed, 1 skipped
+-- step delete: exit 0
+
+== step prune-race ==
+PASS new index attempt on cc-pair 7 indexes 4 documents: {"seconds": 20.5, "timeout_seconds": 900, "attempt_id": 9, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS all documents of the new connector are in search: {"found": ["FILE_CONNECTOR__16ea7455-645d-4882-98d2-40b4b92a8184", "FILE_CONNECTOR__4ad1bbcb-9c38-4574-8d3f-654a62499b24", "FILE_CONNECTOR__7861ff5c-59e7-427c-986b-59fabbf251ee", "FILE_CONNECTOR__eec57f45-6a89-44aa-b436-3b6971fcb4e3"]}
+removal of whatsapp-assistant-product-guide.md during a prune: {"second_prune_started": false, "still_in_search_after_settle": true, "settle_seconds": 60}
+PASS race reproduced: a file removed during a prune stays in search: {"file": "whatsapp-assistant-product-guide.md", "note": "FAIL means the race did not occur in this run"}
+PASS manual prune accepted: {"status": 200, "body": {"success": true, "message": "Successfully created the pruning task.", "data": null}}
+PASS manual prune finished: {"last_pruned": "2026-10-04T14:37:40.965263Z"}
+PASS manual prune removes whatsapp-assistant-product-guide.md from search: {"seconds": 0.1, "remaining": ["FILE_CONNECTOR__16ea7455-645d-4882-98d2-40b4b92a8184", "FILE_CONNECTOR__4ad1bbcb-9c38-4574-8d3f-654a62499b24", "FILE_CONNECTOR__eec57f45-6a89-44aa-b436-3b6971fcb4e3"]}
+PASS step prune-race: 6 checks passed
+-- step prune-race: exit 0
+
+== step backup ==
+ Container onyx-nginx-1 Stopping
+ Container onyx-background-1 Stopping
+ Container onyx-certbot-1 Stopping
+ Container onyx-certbot-1 Stopped
+ Container onyx-nginx-1 Stopped
+ Container onyx-web_server-1 Stopping
+ Container onyx-background-1 Stopped
+ Container onyx-indexing_model_server-1 Stopping
+ Container onyx-web_server-1 Stopped
+ Container onyx-api_server-1 Stopping
+ Container onyx-indexing_model_server-1 Stopped
+ Container onyx-api_server-1 Stopped
+ Container onyx-inference_model_server-1 Stopping
+ Container onyx-relational_db-1 Stopping
+ Container onyx-opensearch-1 Stopping
+ Container onyx-minio-1 Stopping
+ Container onyx-cache-1 Stopping
+ Container onyx-relational_db-1 Stopped
+ Container onyx-minio-1 Stopped
+ Container onyx-cache-1 Stopped
+ Container onyx-opensearch-1 Stopped
+ Container onyx-inference_model_server-1 Stopped
+ Container onyx-relational_db-1 Starting
+ Container onyx-minio-1 Starting
+ Container onyx-opensearch-1 Starting
+ Container onyx-certbot-1 Starting
+ Container onyx-cache-1 Starting
+ Container onyx-inference_model_server-1 Starting
+ Container onyx-indexing_model_server-1 Starting
+ Container onyx-relational_db-1 Started
+ Container onyx-minio-1 Started
+ Container onyx-opensearch-1 Started
+ Container onyx-certbot-1 Started
+ Container onyx-cache-1 Started
+ Container onyx-inference_model_server-1 Started
+ Container onyx-api_server-1 Starting
+ Container onyx-indexing_model_server-1 Started
+ Container onyx-background-1 Starting
+ Container onyx-background-1 Started
+ Container onyx-api_server-1 Started
+ Container onyx-web_server-1 Starting
+ Container onyx-web_server-1 Started
+ Container onyx-web_server-1 Waiting
+ Container onyx-api_server-1 Waiting
+ Container onyx-web_server-1 Healthy
+ Container onyx-api_server-1 Healthy
+ Container onyx-nginx-1 Starting
+ Container onyx-nginx-1 Started
+Backup in /srv/backups/20261004T143742Z. Downtime: 74 s.
+-- step backup: exit 0
+
+== step restore ==
+
+== release files v4.8.4 into /srv/onyx-restore/deployment/docker_compose ==
+Exported v4.8.4 (d15d4451607965e0e349aad231f858596e85ea52) and compose.override.yml.
+stopping the live stack
+ Container onyx-certbot-1 Stopping
+ Container onyx-nginx-1 Stopping
+ Container onyx-background-1 Stopping
+ Container onyx-certbot-1 Stopped
+ Container onyx-nginx-1 Stopped
+ Container onyx-web_server-1 Stopping
+ Container onyx-background-1 Stopped
+ Container onyx-indexing_model_server-1 Stopping
+ Container onyx-web_server-1 Stopped
+ Container onyx-api_server-1 Stopping
+ Container onyx-indexing_model_server-1 Stopped
+ Container onyx-api_server-1 Stopped
+ Container onyx-opensearch-1 Stopping
+ Container onyx-inference_model_server-1 Stopping
+ Container onyx-cache-1 Stopping
+ Container onyx-relational_db-1 Stopping
+ Container onyx-minio-1 Stopping
+ Container onyx-cache-1 Stopped
+ Container onyx-relational_db-1 Stopped
+ Container onyx-minio-1 Stopped
+ Container onyx-opensearch-1 Stopped
+ Container onyx-inference_model_server-1 Stopped
+./db_volume.tar.gz: OK
+./file-system.tar.gz: OK
+./minio_data.tar.gz: OK
+./opensearch-data.tar.gz: OK
+env.backup: OK
+ Volume onyx-restore_opensearch-data Creating
+ Volume onyx-restore_opensearch-data Creating
+ Volume onyx-restore_api_server_logs Creating
+ Volume onyx-restore_api_server_logs Creating
+ Volume onyx-restore_indexing_huggingface_model_cache Creating
+ Volume onyx-restore_minio_data Creating
+ Volume onyx-restore_inference_model_server_logs Creating
+ Volume onyx-restore_minio_data Creating
+ Volume onyx-restore_indexing_huggingface_model_cache Creating
+ Volume onyx-restore_inference_model_server_logs Creating
+ Volume onyx-restore_indexing_model_server_logs Creating
+ Volume onyx-restore_indexing_model_server_logs Creating
+ Volume onyx-restore_db_volume Creating
+ Volume onyx-restore_db_volume Creating
+ Volume onyx-restore_file-system Creating
+ Volume onyx-restore_background_logs Creating
+ Volume onyx-restore_file-system Creating
+ Network onyx-restore_default Creating
+ Volume onyx-restore_background_logs Creating
+ Volume onyx-restore_model_cache_huggingface Creating
+ Volume onyx-restore_model_cache_huggingface Creating
+ Network onyx-restore_default Creating
+ Volume onyx-restore_opensearch-data Created
+ Volume onyx-restore_opensearch-data Created
+ Volume onyx-restore_indexing_model_server_logs Created
+ Volume onyx-restore_indexing_model_server_logs Created
+ Volume onyx-restore_minio_data Created
+ Volume onyx-restore_minio_data Created
+ Volume onyx-restore_indexing_huggingface_model_cache Created
+ Volume onyx-restore_indexing_huggingface_model_cache Created
+ Volume onyx-restore_model_cache_huggingface Created
+ Volume onyx-restore_model_cache_huggingface Created
+ Volume onyx-restore_file-system Created
+ Volume onyx-restore_file-system Created
+ Volume onyx-restore_background_logs Created
+ Volume onyx-restore_background_logs Created
+ Volume onyx-restore_api_server_logs Created
+ Volume onyx-restore_api_server_logs Created
+ Volume onyx-restore_db_volume Created
+ Volume onyx-restore_db_volume Created
+ Volume onyx-restore_inference_model_server_logs Created
+ Volume onyx-restore_inference_model_server_logs Created
+ Network onyx-restore_default Created
+ Network onyx-restore_default Created
+ Container onyx-restore-relational_db-1 Creating
+ Container onyx-restore-cache-1 Creating
+ Container onyx-restore-minio-1 Creating
+ Container onyx-restore-opensearch-1 Creating
+ Container onyx-restore-indexing_model_server-1 Creating
+ Container onyx-restore-inference_model_server-1 Creating
+ Container onyx-restore-opensearch-1 Created
+ Container onyx-restore-relational_db-1 Created
+ Container onyx-restore-minio-1 Created
+ Container onyx-restore-cache-1 Created
+ Container onyx-restore-inference_model_server-1 Created
+ Container onyx-restore-api_server-1 Creating
+ Container onyx-restore-indexing_model_server-1 Created
+ Container onyx-restore-background-1 Creating
+ Container onyx-restore-background-1 Created
+ Container onyx-restore-api_server-1 Created
+ Container onyx-restore-web_server-1 Creating
+ Container onyx-restore-web_server-1 Created
+ Container onyx-restore-nginx-1 Creating
+ Container onyx-restore-nginx-1 Created
+ Container onyx-restore-relational_db-1 Starting
+ Container onyx-restore-cache-1 Starting
+ Container onyx-restore-minio-1 Starting
+ Container onyx-restore-opensearch-1 Starting
+ Container onyx-restore-inference_model_server-1 Starting
+ Container onyx-restore-relational_db-1 Started
+ Container onyx-restore-cache-1 Started
+ Container onyx-restore-minio-1 Started
+ Container onyx-restore-opensearch-1 Started
+ Container onyx-restore-inference_model_server-1 Started
+ Container onyx-restore-api_server-1 Starting
+ Container onyx-restore-api_server-1 Started
+ Container onyx-restore-web_server-1 Starting
+ Container onyx-restore-web_server-1 Started
+ Container onyx-restore-web_server-1 Waiting
+ Container onyx-restore-api_server-1 Waiting
+ Container onyx-restore-web_server-1 Healthy
+ Container onyx-restore-api_server-1 Healthy
+ Container onyx-restore-nginx-1 Starting
+ Container onyx-restore-nginx-1 Started
+Restored into project onyx-restore. http://localhost:3100/api/health answers 200.
+The background service is not started. Disable the connectors and the bots before you start it.
+-- step restore: exit 0
+
+== step restore-search ==
+PASS search Q1 as user-a@example.com: {"expected_top": "expense-policy.md", "seconds": 14.65, "top_titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md"]}
+PASS search Q2 as user-a@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.26, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search Q3 as user-a@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.21, "top_titles": ["refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q4 as user-a@example.com: {"expected_top": null, "seconds": 0.2, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "refund-policy-2026.md", "expense-policy.md"]}
+PASS search Q5 as user-a@example.com: {"expected_top": null, "seconds": 0.21, "top_titles": ["expense-policy.md", "expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner user-b@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from user-a@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+-- step restore-search: exit 0
+
+== step restore-privacy ==
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 3, "name": "HR private", "description": null, "created_at": "2026-10-04T14:35:06.102394Z", "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "instructions": null, "chat_sessions": []}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "23d78888-4b42-4768-bcb4-417cdb3f5c31", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "file_id": "7cfa9272-56b9-433a-a890-b0d0cdcbd397", "created_at": "2026-10-04T14:35:06.445111", "status": "COMPLETED", "last_accessed_at": "2026-10-04T14:35:06.443471Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 0, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file 23d78888-4b42-4768-bcb4-417cdb3f5c31: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+-- step restore-privacy: exit 0
+
+== step restore-down ==
+project onyx-restore has no containers and no volumes
+-- step restore-down: exit 0
+
+== step live-start ==
+ Container onyx-certbot-1 Starting
+ Container onyx-indexing_model_server-1 Starting
+ Container onyx-inference_model_server-1 Starting
+ Container onyx-minio-1 Starting
+ Container onyx-cache-1 Starting
+ Container onyx-relational_db-1 Starting
+ Container onyx-opensearch-1 Starting
+ Container onyx-certbot-1 Started
+ Container onyx-indexing_model_server-1 Started
+ Container onyx-minio-1 Started
+ Container onyx-inference_model_server-1 Started
+ Container onyx-cache-1 Started
+ Container onyx-relational_db-1 Started
+ Container onyx-opensearch-1 Started
+ Container onyx-api_server-1 Starting
+ Container onyx-background-1 Starting
+ Container onyx-api_server-1 Started
+ Container onyx-web_server-1 Starting
+ Container onyx-web_server-1 Started
+ Container onyx-web_server-1 Waiting
+ Container onyx-api_server-1 Waiting
+ Container onyx-background-1 Started
+ Container onyx-web_server-1 Healthy
+ Container onyx-api_server-1 Healthy
+ Container onyx-nginx-1 Starting
+ Container onyx-nginx-1 Started
+https://my-knowledge.duckdns.org/api/health answers 200.
+-- step live-start: exit 0
+
+== docker stats ==
+CONTAINER ID   NAME                            CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O     PIDS
+7592f2bf463a   onyx-nginx-1                    0.00%     6.598MiB / 15.61GiB   0.04%     2.44kB / 5.82kB   0B / 0B       10
+c81c5ef265cd   onyx-web_server-1               0.00%     80.43MiB / 15.61GiB   0.50%     2.05kB / 358B     0B / 0B       11
+2fbdcba2f2c5   onyx-api_server-1               0.20%     591.6MiB / 15.61GiB   3.70%     114kB / 112kB     0B / 0B       9
+c57575ce3e76   onyx-background-1               2.31%     1.8GiB / 15.61GiB     11.53%    375kB / 396kB     0B / 246kB    65
+1c336c4e1023   onyx-indexing_model_server-1    0.19%     319.5MiB / 15.61GiB   2.00%     2.45kB / 126B     0B / 0B       9
+29d3634f8290   onyx-cache-1                    1.37%     4.48MiB / 15.61GiB    0.03%     272kB / 238kB     0B / 0B       6
+0590ace88548   onyx-inference_model_server-1   0.19%     319.4MiB / 15.61GiB   2.00%     2.32kB / 126B     0B / 0B       9
+60c253f6c544   onyx-minio-1                    0.05%     208MiB / 15.61GiB     1.30%     9.4kB / 5.28kB    0B / 8.19kB   11
+20dc25492cd3   onyx-relational_db-1            0.03%     113.6MiB / 15.61GiB   0.71%     187kB / 177kB     0B / 221kB    60
+2cfe5dc8865b   onyx-certbot-1                  0.00%     1.59MiB / 15.61GiB    0.01%     2.71kB / 126B     0B / 4.1kB    2
+6ccdb655e49a   onyx-opensearch-1               2.42%     2.564GiB / 15.61GiB   16.42%    34.9kB / 28.6kB   0B / 15.2MB   73
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989        6520        4768          22        4700        8950
+Swap:              0           0           0
+
+== disk / ==
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        97G   23G   75G  24% /
+
+== summary ==
+step             exit code
+public-url       0
+cleanup          0
+index            0
+search           0
+privacy          0
+update           0
+delete           0
+prune-race       0
+backup           0
+restore          0
+restore-search   0
+restore-privacy  0
+restore-down     0
+live-start       0
+RESULT: PASS (all steps exited with 0)
