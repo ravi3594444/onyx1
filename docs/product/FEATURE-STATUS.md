@@ -5,6 +5,17 @@ license, `ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=false`, license enforcement on
 credentials (Fireworks AI) are supplied and in configuration. No SMTP, web-search, image or voice
 provider keys.
 
+> **Update, 5 October 2026.** The public URL now runs the multi-tenant stack `onyx-saas`
+> (`docs/product/MULTI-TENANT.md`, sections 6 and 7). There, `MULTI_TENANT=true` loads the EE
+> tenancy code without a license (upstream behaviour for multi-tenant mode); license
+> enforcement is not changed. Every new company gets the platform model and the knowledge
+> instructions through native tenant setup (`product/deploy/backend-patch`). The table below
+> describes the single-tenant stack `onyx`, which stays stopped with its volumes for rollback.
+> Not available on `onyx-saas`: email delivery (no SMTP), invite accept/deny dialog (Onyx
+> joins an invited address on sign-up instead), billing pages, team-by-domain join, and
+> "Leave team" (nginx answers 409 for every request: a temporary limitation, not a complete
+> implementation).
+
 Source of truth for "what exists": the `v4.8.4` tag checkout (commit `d15d445`). Paths below are
 relative to that tree. VM evidence: `docs/product/TRD-PLAN.md`, section "Development VM evidence",
 and `product/test-corpus/README.md` with `product/test-corpus/evidence/`.
