@@ -1,0 +1,110 @@
+name: Build 22nd X AI backend image
+# Builds the Onyx backend image at the pinned upstream tag with product/deploy/backend-patch
+# applied (new onyx/axi package, reviewed patches), then pushes it to GHCR. Deploy the printed
+# digest through ONYX_BACKEND_IMAGE in product/deploy/release.env.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "product/deploy/backend-patch/**"
+      - "product/deploy/build-backend-image.sh"
+      - ".github/workflows/axi-build-backend.yml"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  IMAGE: ghcr.io/ravi3594444/onyx1/onyx-backend
+
+jobs:
+  build:
+    name: Build and push the backend image
+    if: github.repository == 'ravi3594444/onyx1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v6
+        with:
+          persist-credentials: false
+      # The backend image is large (Playwright, model tokenizers); the runner needs the space.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+          docker system prune -af
+          df -h
+      - name: Fetch the upstream release tag
+        run: |
+          tag="$(sed -n 's/^ONYX_RELEASE_TAG=//p' product/deploy/release.env)"
+          git fetch --no-tags --depth=1 https://github.com/onyx-dot-app/onyx \
+            "refs/tags/${tag}:refs/tags/${tag}"
+          echo "ONYX_RELEASE_TAG=${tag}" >>"${GITHUB_ENV}"
+      - name: Check the patches against the tag
+        run: product/deploy/backend-patch/check-upstream.sh "${ONYX_RELEASE_TAG}"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # ratchet:docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the image
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          product/deploy/build-backend-image.sh \
+            --tag "${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}" \
+            --tag "${IMAGE}:${GITHUB_SHA}" | tee "${RUNNER_TEMP}/build.log"
+      # Imports need no database. The hook must be in setup_tenant and the key guard in place.
+      - name: Smoke test the image
+        run: |
+          docker run --rm "${IMAGE}:${GITHUB_SHA}" python -c "
+          import inspect
+          import onyx.axi.backfill
+          import onyx.axi.tenant_defaults
+          import ee.onyx.server.tenants.provisioning as p
+          import onyx.server.manage.llm.api as llm_api
+          assert 'apply_platform_defaults' in inspect.getsource(p.setup_tenant)
+          assert 'new_provider_type' in inspect.getsource(llm_api._validate_llm_provider_change)
+          assert onyx.axi.tenant_defaults.FIREWORKS_DEFAULT_API_KEY is None
+          print('smoke test passed')
+          "
+          docker run --rm "${IMAGE}:${GITHUB_SHA}" python -m onyx.axi.backfill --help
+      - name: Push the image
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          docker push "${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}"
+          docker push "${IMAGE}:${GITHUB_SHA}"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}:${GITHUB_SHA}")"
+          digest="${digest#*@}"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::No digest for the pushed image."
+            exit 1
+          fi
+          echo "${digest}" >"${RUNNER_TEMP}/image-digest-backend.txt"
+          {
+            echo "## Backend image ${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}"
+            echo
+            echo "Digest: \`${digest}\`"
+            echo
+            echo "Tags: \`${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}\`, \`${IMAGE}:${GITHUB_SHA}\`"
+            echo
+            echo "Deploy: set in product/deploy/release.env"
+            echo
+            echo '```'
+            echo "ONYX_BACKEND_IMAGE=${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}@${digest}"
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v4
+        with:
+          name: image-digest-backend
+          path: ${{ runner.temp }}/image-digest-backend.txt
+          retention-days: 90

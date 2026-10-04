@@ -22,8 +22,9 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-# The same text that the multi-tenant backend gets from DEFAULT_SYSTEM_PROMPT_ADDITION
-# (product/deploy/backend-patch). Keep the two in sync.
+# Twin: KNOWLEDGE_INSTRUCTIONS in
+# product/deploy/backend-patch/overlay/backend/onyx/axi/tenant_defaults.py, which the
+# multi-tenant backend writes into every new tenant. Keep the two identical.
 ASSISTANT_ADDITION = """
 # Knowledge rules
 The search tool returns only documents that the current user is allowed to read. Access control \

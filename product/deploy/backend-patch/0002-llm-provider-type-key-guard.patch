@@ -1,0 +1,67 @@
+22nd X AI: reject a provider type change that keeps the stored API key (multi-tenant mode).
+Upstream already rejects a changed api_base or custom_config. A new provider type also
+sends the stored platform key to another endpoint, so it needs a new key too (HTTP 400).
+Covers PUT /api/admin/llm/provider, POST /api/admin/llm/test and the image generation
+config update, which keeps the stored key of the old provider.
+Apply from the backend/ export root: patch -p1 --forward --batch --fuzz=0 < 0002-llm-provider-type-key-guard.patch
+
+--- a/onyx/server/manage/llm/api.py
++++ b/onyx/server/manage/llm/api.py
+@@ -307,6 +307,8 @@
+     new_api_base: str | None,
+     new_custom_config: dict[str, str] | None,
+     api_key_changed: bool,
++    existing_provider_type: str | None = None,
++    new_provider_type: str | None = None,
+ ) -> None:
+     """Validate that api_base and custom_config changes are safe.
+ 
+@@ -340,10 +342,17 @@
+         new_custom_config
+     ) != _without_surface_keys(existing_custom_config)
+ 
+-    if api_base_changed or custom_config_changed:
++    # A new provider type sends the stored key to another endpoint.
++    provider_type_changed = (
++        existing_provider_type is not None
++        and new_provider_type is not None
++        and new_provider_type != existing_provider_type
++    )
++
++    if api_base_changed or custom_config_changed or provider_type_changed:
+         raise OnyxError(
+             OnyxErrorCode.VALIDATION_ERROR,
+-            "API base and/or custom config cannot be changed without changing the API key",
++            "API base, provider type and/or custom config cannot be changed without changing the API key",
+         )
+ 
+ 
+@@ -468,6 +477,8 @@
+                 new_api_base=test_llm_request.api_base,
+                 new_custom_config=test_custom_config,
+                 api_key_changed=False,
++                existing_provider_type=existing_provider.provider,
++                new_provider_type=test_llm_request.provider,
+             )
+             test_api_key = (
+                 existing_provider.api_key.get_value(apply_mask=False)
+@@ -630,6 +641,8 @@
+             new_api_base=llm_provider_upsert_request.api_base,
+             new_custom_config=llm_provider_upsert_request.custom_config,
+             api_key_changed=llm_provider_upsert_request.api_key_changed,
++            existing_provider_type=existing_provider.provider,
++            new_provider_type=llm_provider_upsert_request.provider,
+         )
+ 
+     persona_ids = llm_provider_upsert_request.personas
+--- a/onyx/server/manage/image_generation/api.py
++++ b/onyx/server/manage/image_generation/api.py
+@@ -450,6 +450,8 @@
+                     new_api_base=config_update.api_base,
+                     new_custom_config=config_update.custom_config,
+                     api_key_changed=False,
++                    existing_provider_type=old_provider.provider,
++                    new_provider_type=config_update.provider,
+                 )
+                 # Preserve existing API key when user didn't change it
+                 actual_api_key = (
