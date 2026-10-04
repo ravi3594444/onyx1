@@ -36,6 +36,8 @@ readonly EVIDENCE_ROOT="${ONYX_DEPLOY_DIR}/evidence"
 readonly USERS_FILE="${ONYX_DEPLOY_DIR}/test-users.env"
 # The workflow writes model.env and smtp.env here (mode 600) from the environment secrets.
 readonly SECRETS_DIR="${ONYX_DEPLOY_DIR}/secrets"
+# The model that the live stack runs (model action, run 25). Default for the platform model.
+readonly DEFAULT_PLATFORM_MODEL=accounts/fireworks/models/deepseek-v4p1-flash
 readonly COMPOSE_DIR="${ONYX_DEPLOY_DIR}/deployment/docker_compose"
 readonly RESTORE_COMPOSE_DIR="${ONYX_RESTORE_DIR}/deployment/docker_compose"
 readonly FORK_URL=https://github.com/ravi3594444/onyx1
@@ -1851,24 +1853,50 @@ saas_cloud_backend_image() {
 # Copies the platform model from secrets/model.env into <env file> as FIREWORKS_DEFAULT_*.
 # The cloud backend image reads them when it sets up a company. Key names only in the log.
 saas_model_defaults() {
-  local env_file="$1" file="${SECRETS_DIR}/model.env"
+  local env_file="$1" file="${SECRETS_DIR}/model.env" key model provider base
   if [[ -f "${SECRETS_DIR}/model.sealed" ]]; then
     unseal_model_key
   fi
   [[ -f "${file}" ]] ||
     die "${file} is missing. Run the model action first: every new company gets the platform model from it."
-  (
-    # shellcheck disable=SC1090,SC1091
-    source "${file}"
-    [[ -n "${MODEL_API_KEY:-}" ]] || die "MODEL_API_KEY is empty in ${file}."
-    [[ -n "${MODEL_NAME:-}" ]] ||
-      die "MODEL_NAME is missing in ${file}. Run the model action with the model id once."
-    set_env_key FIREWORKS_DEFAULT_API_KEY "${MODEL_API_KEY}" "${env_file}"
-    set_env_key FIREWORKS_DEFAULT_MODEL "${MODEL_NAME}" "${env_file}"
-    set_env_key FIREWORKS_DEFAULT_PROVIDER "${MODEL_PROVIDER:-fireworks_ai}" "${env_file}"
-    set_env_key FIREWORKS_DEFAULT_API_BASE "${MODEL_API_BASE:-}" "${env_file}"
-  )
+  # Read in this shell, not in a subshell: actions run inside "... || code=$?", where a
+  # failing subshell does not stop the script.
+  key="$(model_env_value "${file}" MODEL_API_KEY)"
+  model="$(model_env_value "${file}" MODEL_NAME)"
+  provider="$(model_env_value "${file}" MODEL_PROVIDER)"
+  base="$(model_env_value "${file}" MODEL_API_BASE)"
+  [[ -n "${key}" ]] || die "MODEL_API_KEY is empty in ${file}."
+  if [[ -z "${model}" ]]; then
+    # model.env of the model action before MODEL_NAME existed. The live stack runs this model.
+    model="${DEFAULT_PLATFORM_MODEL}"
+    echo "MODEL_NAME is not in ${file}; using ${model}."
+  fi
+  set_env_key FIREWORKS_DEFAULT_API_KEY "${key}" "${env_file}"
+  set_env_key FIREWORKS_DEFAULT_MODEL "${model}" "${env_file}"
+  set_env_key FIREWORKS_DEFAULT_PROVIDER "${provider:-fireworks_ai}" "${env_file}"
+  set_env_key FIREWORKS_DEFAULT_API_BASE "${base}" "${env_file}"
+  grep -qE '^FIREWORKS_DEFAULT_API_KEY=.+' "${env_file}" ||
+    die "FIREWORKS_DEFAULT_API_KEY did not reach ${env_file}."
   echo "Set from ${file} (values not shown): FIREWORKS_DEFAULT_API_KEY FIREWORKS_DEFAULT_MODEL FIREWORKS_DEFAULT_PROVIDER FIREWORKS_DEFAULT_API_BASE"
+}
+
+# Prints one value of a KEY=value file (the format that the model action writes, %q quoting
+# allowed) without sourcing the file into this shell.
+model_env_value() {
+  python3 - "$1" "$2" <<'PY'
+import shlex, sys
+path, wanted = sys.argv[1], sys.argv[2]
+value = ""
+for line in open(path):
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, raw = line.split("=", 1)
+    if key.strip() == wanted:
+        parts = shlex.split(raw)
+        value = parts[0] if parts else ""
+print(value)
+PY
 }
 
 # Creates the saas folder, exports the release files and the overlays, and writes .env once.
