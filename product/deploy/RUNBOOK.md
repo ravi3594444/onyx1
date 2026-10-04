@@ -101,8 +101,9 @@ The script does these steps and prints a `PASS` or `FAIL` line for each check:
 3. Copies `options-ssl-nginx.conf` and `ssl-dhparams.pem` from `product/deploy/tls/` (pinned
    copies from certbot v5.8.0, checked against `SHA256SUMS`) into `../data/certbot/conf`. It
    copies `product/deploy/nginx/redirect.conf.template` with the domain filled in into
-   `../data/nginx-extra/`, which the overlay mounts into nginx. The nginx command fills in the
-   container address at every start: the redirect block listens on that address only. The
+   `../data/nginx-extra/`, with `render-redirect.sh`, which the overlay mounts into nginx. The
+   script runs at every nginx start and writes one `listen` line per container address, so the
+   redirect block listens on those addresses only; without an address nginx does not start. The
    upstream HTTPS block proxies every request to `localhost:80` with the same Host header, and
    those requests must reach the upstream port-80 block, not the redirect. If no certificate
    exists, it writes a 1-day dummy certificate (`CN=localhost`), so that nginx can start.

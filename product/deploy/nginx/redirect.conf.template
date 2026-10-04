@@ -1,13 +1,13 @@
 # Added by enable-https.sh next to the upstream template (RUNBOOK.md, section 3a).
-# enable-https.sh fills in ${DOMAIN}. The nginx command in compose.https.yml fills in
-# ${LISTEN_ADDR} with the container's own address at every start.
-# The block listens on that address only. Requests from the internet arrive there, so
+# enable-https.sh fills in the DOMAIN placeholder. render-redirect.sh fills in the
+# LISTEN_LINES placeholder with one listen line per address of the container at every start
+# (compose.https.yml). Keep the placeholders out of the comments: envsubst replaces them.
+# The block listens on those addresses only. Requests from the internet arrive there, so
 # they get the ACME challenge path or a redirect to HTTPS. The upstream HTTPS block proxies
 # every request to localhost:80 with the same Host header; those requests arrive on
 # 127.0.0.1, which only the upstream port-80 block listens on, so they reach the app.
 server {
-    listen ${LISTEN_ADDR}:80;
-    server_name ${DOMAIN};
+${LISTEN_LINES}    server_name ${DOMAIN};
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
