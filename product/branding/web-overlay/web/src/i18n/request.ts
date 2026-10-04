@@ -8,6 +8,7 @@ import {
   runtimeLocale,
 } from "@/i18n/config";
 import englishMessages from "@/i18n/messages/en.json";
+import { BRANDING_MESSAGES } from "@/lib/branding";
 
 type MessageTree = { [key: string]: string | MessageTree };
 
@@ -31,7 +32,11 @@ function withEnglishFallback(base: MessageTree, overlay: MessageTree) {
 
 // SAFETY: catalog files are JSON objects whose values are strings or nested
 // objects of the same shape; the i18n catalog test enforces this.
-const english = englishMessages as MessageTree;
+// The 22nd X AI text replaces the matching English entries.
+const english = withEnglishFallback(
+  englishMessages as MessageTree,
+  BRANDING_MESSAGES as MessageTree
+);
 
 export default getRequestConfig(async () => {
   const cookieStore = await cookies();

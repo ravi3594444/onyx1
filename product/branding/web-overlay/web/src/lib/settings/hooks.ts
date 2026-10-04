@@ -15,6 +15,7 @@ import {
   Settings,
 } from "@/lib/settings/types";
 import { EE_ENABLED } from "@/lib/constants";
+import { BRANDING } from "@/lib/branding";
 
 const SETTINGS_ERROR_RETRY_INTERVAL = 5_000;
 
@@ -105,7 +106,7 @@ export function useSettings(): AppSettings {
   return {
     ...core,
     enterprise: enterprise ?? null,
-    appName: enterprise?.application_name?.trim() || "Onyx",
+    appName: enterprise?.application_name?.trim() || BRANDING.NAME,
     logoUrl: enterprise?.use_custom_logo
       ? `/api/enterprise-settings/logo?v=${logoBuster}`
       : null,
