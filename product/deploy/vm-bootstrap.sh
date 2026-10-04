@@ -8,6 +8,7 @@
 #        vm-bootstrap.sh owner <full commit SHA> <owner email> <invite email|-> <keep|on|off>
 #        vm-bootstrap.sh model <full commit SHA> <litellm provider> <model id|list>
 #        vm-bootstrap.sh smtp <full commit SHA>
+#        vm-bootstrap.sh keygen
 # Layout on the VM: /srv/onyx-src (clone of the fork), /srv/onyx (release files, .env,
 # evidence), /srv/backups. See product/deploy/RUNBOOK.md.
 # The script never creates a second .env, never removes the live volumes and never
@@ -64,6 +65,7 @@ main() {
     owner) owner_wrapper "$@" ;;
     model) model_wrapper "$@" ;;
     smtp) smtp_setup "$@" ;;
+    keygen) inbox_keygen ;;
     *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha>" ;;
   esac
 }
@@ -856,8 +858,11 @@ model_wrapper() {
 configure_model() {
   local sha="$1" provider="$2" model="$3"
   section "vm-bootstrap model ${provider} ${model} ${sha} $(date -u +%FT%TZ)"
+  if [[ -f "${SECRETS_DIR}/model.sealed" ]]; then
+    unseal_model_key
+  fi
   [[ -f "${SECRETS_DIR}/model.env" ]] ||
-    die "${SECRETS_DIR}/model.env is missing. The workflow writes it from the secret MODEL_API_KEY."
+    die "${SECRETS_DIR}/model.env is missing. The workflow writes it from the secret MODEL_API_KEY or the sealed_model_key input."
   # shellcheck disable=SC1090,SC1091
   source "${SECRETS_DIR}/model.env"
   [[ -n "${MODEL_API_KEY:-}" ]] || die "MODEL_API_KEY is empty in ${SECRETS_DIR}/model.env."
@@ -917,6 +922,36 @@ else:
 with open(path, "w") as handle:
     handle.write("\n".join(lines) + "\n")
 PY
+}
+
+
+# ---------------------------------------------------------------- sealed secrets
+
+# Creates the inbox key once and prints its public half. A secret encrypted to it can travel
+# through a public workflow input: only this VM can decrypt it.
+inbox_keygen() {
+  local key="${SECRETS_DIR}/inbox.pem"
+  section "vm-bootstrap keygen $(date -u +%FT%TZ)"
+  install -d -m 700 "${SECRETS_DIR}"
+  if [[ ! -f "${key}" ]]; then
+    (umask 077 && openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "${key}" 2>/dev/null)
+    echo "Created ${key} (mode 600)."
+  fi
+  echo "Public key (encrypt with RSA-OAEP, SHA-256, then base64):"
+  openssl pkey -in "${key}" -pubout
+}
+
+# Decrypts model.sealed (base64 of RSA-OAEP SHA-256) into model.env, then removes it.
+unseal_model_key() {
+  local key="${SECRETS_DIR}/inbox.pem" plain
+  [[ -f "${key}" ]] || die "${key} is missing. Run the keygen action first."
+  plain="$(base64 -d "${SECRETS_DIR}/model.sealed" |
+    openssl pkeyutl -decrypt -inkey "${key}" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256)" ||
+    die "The sealed model key does not decrypt with ${key}."
+  [[ "${plain}" =~ ^[A-Za-z0-9._-]+$ ]] || die "The decrypted model key has unexpected characters."
+  (umask 077 && printf 'MODEL_API_KEY=%q\nMODEL_API_BASE=\n' "${plain}" >"${SECRETS_DIR}/model.env")
+  rm -f "${SECRETS_DIR}/model.sealed"
+  echo "Unsealed the model key into ${SECRETS_DIR}/model.env (value not shown)."
 }
 
 main "$@"

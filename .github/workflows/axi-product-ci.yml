@@ -106,7 +106,8 @@ jobs:
           done
           images="$(docker compose config --images | sort -u)"
           echo "${images}"
-          onyx_images="$(grep -E '^(docker\.io/)?onyxdotapp/onyx-' <<<"${images}" || true)"
+          # The web image is our own build (ghcr.io/.../onyx-web-server), the others are upstream.
+          onyx_images="$(grep -E '/onyx-(backend|web-server|model-server):' <<<"${images}" || true)"
           expected="$(printf '%s\n' "${ONYX_BACKEND_IMAGE}" "${ONYX_WEB_SERVER_IMAGE}" "${ONYX_MODEL_SERVER_IMAGE}" | sort -u)"
           if [[ "${onyx_images}" != "${expected}" ]]; then
             echo "::error::The Onyx images are not the digests in release.env."
