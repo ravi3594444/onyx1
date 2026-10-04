@@ -26,6 +26,7 @@ on:
           - owner
           - model
           - smtp
+          - keygen
       web_domain:
         description: Public URL of the stack (install only, for a new .env)
         type: string
@@ -55,6 +56,10 @@ on:
         description: Model id, or list to show the provider's matching models (model only)
         type: string
         default: list
+      sealed_model_key:
+        description: Model key encrypted to the VM inbox key (base64; model only, when the secret MODEL_API_KEY is not set)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -87,6 +92,7 @@ jobs:
       INVITE_ONLY: ${{ inputs.invite_only }}
       MODEL_PROVIDER: ${{ inputs.model_provider }}
       MODEL_NAME: ${{ inputs.model_name }}
+      SEALED_MODEL_KEY: ${{ inputs.sealed_model_key }}
     steps:
       - name: Check the deploy secrets
         env:
@@ -126,12 +132,17 @@ jobs:
           # reach the command line or the log.
           case "${BOOTSTRAP_ACTION}" in
             model)
-              if [[ -z "${MODEL_API_KEY}" ]]; then
-                echo "::error::Add the secret MODEL_API_KEY to the environment ci-protected."
+              if [[ -n "${MODEL_API_KEY}" ]]; then
+                name=model.env
+                content="$(printf 'MODEL_API_KEY=%q\nMODEL_API_BASE=%q\n' "${MODEL_API_KEY}" "${MODEL_API_BASE}")"
+              elif [[ "${SEALED_MODEL_KEY}" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+                # Ciphertext for the VM inbox key; only the VM can decrypt it.
+                name=model.sealed
+                content="${SEALED_MODEL_KEY}"
+              else
+                echo "::error::Add the secret MODEL_API_KEY to ci-protected, or pass sealed_model_key."
                 exit 1
               fi
-              name=model.env
-              content="$(printf 'MODEL_API_KEY=%q\nMODEL_API_BASE=%q\n' "${MODEL_API_KEY}" "${MODEL_API_BASE}")"
               ;;
             smtp)
               if [[ -z "${SMTP_SERVER}" || -z "${EMAIL_FROM}" ]]; then
@@ -197,6 +208,7 @@ jobs:
               args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
               ;;
             smtp) args="smtp ${GITHUB_SHA}" ;;
+            keygen) args="keygen" ;;
             *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
           esac
           if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
