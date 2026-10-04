@@ -233,9 +233,9 @@ env -u GH_TOKEN -u GITHUB_TOKEN uvx pre-commit run \
 Without a token, zizmor skips its online audits. In CI it gets the job token.
 
 Deploy secrets. The SSH key gives `docker` access, which is equal to root on the VM.
-Thus keep the secrets only in the environment `development`, never in the repository:
+Thus keep the secrets only in the environment `ci-protected`, never in the repository:
 
-1. Create the environment `development` (**Settings > Environments**) before you add secrets.
+1. Create the environment `ci-protected` (**Settings > Environments**) before you add secrets.
 2. Set **Deployment branches and tags** to **Selected branches** with the rule `main`.
    Then a workflow on another branch cannot read the secrets. A required reviewer is optional.
 3. Add the 4 secrets to this environment:
@@ -289,5 +289,5 @@ Next steps:
 
 2. Merge the workflows to `main`. GitHub starts the deploy trigger only for workflow files on
    the default branch.
-3. When the VM exists, create the environment `development` and add the deploy secrets as
+3. When the VM exists, create the environment `ci-protected` and add the deploy secrets as
    shown above.
