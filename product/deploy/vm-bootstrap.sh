@@ -556,6 +556,13 @@ register_user() {
   case "${code}" in
     201) echo "registered ${email}" ;;
     400) echo "${email} exists already ($(tr -d '\n' <"${TMPDIR}/register.out" | cut -c1-120))" ;;
+    403)
+      # Invite-only sign-up refuses every registration, also of an existing account. The
+      # logins of the checks show whether the account exists.
+      grep -q "invite-only" "${TMPDIR}/register.out" ||
+        die "register ${email} returned 403: $(cut -c1-300 "${TMPDIR}/register.out")"
+      echo "${email}: sign-up is invite-only (403), the account must exist already."
+      ;;
     *) die "register ${email} returned ${code}: $(cut -c1-300 "${TMPDIR}/register.out")" ;;
   esac
 }
