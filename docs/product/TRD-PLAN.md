@@ -114,7 +114,8 @@ Use a recorded stable baseline and a supplied development target.
 
 Our scope is the existing knowledge base with our branding:
 existing chat/search, documents, one supported connector, source citations,
-two-user permission checks and durable storage.
+permission checks between members and durable storage. The owner and one friend are the first
+testers; the workspace keeps the full Onyx member model and has no user limit of ours.
 
 Use existing appearance settings first. Obtain missing brand inputs.
 Keep auth, document ACLs and license enforcement intact.
