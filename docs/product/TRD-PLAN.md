@@ -314,6 +314,9 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | 31 | mt-up | `7fcdd63` | PASS: isolated multi-tenant stack `onyx-mt` (own volumes, own Postgres, OpenSearch, MinIO and Redis) healthy at `127.0.0.1:3200` with the branded web image; host memory 4.0 GiB available with both stacks up (`...vm-mt-up-run31.txt`). |
 | 32 | mt-check | `7fcdd63` | PASS, 42 of 42: Company A and B owners register uninvited and each gets its own workspace with admin capability; the invited member joins A as a basic user; B's invitation lands in B only; users, documents, search, chats, connectors, agents, files, projects and personal API keys stay inside their company (`...vm-mt-check-run32.txt`). |
 | 33 | mt-restart | `7fcdd63` | PASS: `down` and `up -d` of the `onyx-mt` stack, health 200, the same volumes, then 29 of 29 company checks again: both owners keep their workspace and admin capability, the member stays basic in A, documents, search, chats, connectors, agents, files, projects and API keys stay separated (`...vm-mt-restart-run33.txt`). |
+| 36, 38 | assistant-prompt set | `2bef18e`, `76a1c78` | PASS: the default assistant of the live workspace gets the knowledge rules through `PATCH /api/admin/default-assistant` (prompt 1123 to 1858 characters). `reset` restores the built-in prompt (`...vm-assistant-prompt-run36.txt`, `...run38.txt`). |
+| 37 | chat-check | `2bef18e` | Q5 for the owner of the restricted file PASS (38 to 46 lakh, cited). Q4 still cited the unrelated documents it listed. Q2 FAIL is an artifact: the standalone chat step runs after the update test replaced the guide, so the answer states the updated hours that the document holds (`...vm-chat-check-run37.txt`). |
+| 39 | chat-check | `76a1c78` | Q4 PASS in both modes: "the documents I have access to don't cover a parental leave policy", no citation. Q5 PASS for user A (no information) and for user B (band with citation). Q1, Q3 PASS. Q2 as in run 37 (`...vm-chat-check-run39.txt`). Assertions unchanged. |
 
 ### Results on the VM (run 9, commit `6fdf922`)
 
@@ -330,7 +333,7 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | Isolated restore | PASS. Port 3100 healthy in about 50 s; `search` 8 of 8 and `privacy` 7 of 7 on the copy; live stack started again afterwards. |
 | Restart | PASS (runs 10 and 20). `docker compose down` then `up -d`: all containers recreated in about 2 minutes, the 10 named volumes unchanged, indexed documents and access rules intact (`search` 8 of 8, `privacy` 7 of 7), public HTTPS URL back with 200. Sessions live in Redis and end with a restart. |
 | Public HTTPS URL | PASS (run 19). Trusted certificate, 200 over HTTPS, 301 from plain HTTP. The certbot service renews every 12 h; nginx reloads every 6 h. |
-| Chat and citations | PASS for the model connection (run 25: Fireworks DeepSeek v4.1 flash answers in about 2 s). Knowledge-grounded answers with citations PASS for Q1 to Q3, after the update and after the deletion (run 27). Q4 and Q5-restricted FAIL on model wording; see run 27. |
+| Chat and citations | PASS for the model connection (run 25: Fireworks DeepSeek v4.1 flash answers in about 2 s). Knowledge-grounded answers with citations PASS for Q1 to Q3, after the update and after the deletion (run 27). Q4 and Q5-restricted were fixed through the default assistant instructions (runs 38, 39); assertions unchanged. |
 | Branding | PASS for the own MIT-covered web image (run 26 serves `v4.8.4-axi.1`; the live HTML carries the 22nd X AI title and tagline, `...vm-branding-live.txt`). Native Enterprise theming stays BLOCKED without a Business license; enforcement stays on. |
 
 ### Resources (run 9, after the checks, idle)

@@ -1,0 +1,149 @@
+# Bootstrap dev VM run 39 (chat-check after the final wording), commit 76a1c786cdfcf3fab7690c49d65af5e7a49018fa, GitHub Actions job 111488003948
+# https://github.com/ravi3594444/onyx1/actions/runs/37219920868
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  keygen) args="keygen" ;;
+  mt-up) args="mt-up ${GITHUB_SHA}" ;;
+  mt-check) args="mt-check ${GITHUB_SHA}" ;;
+  mt-check-after-restart) args="mt-check ${GITHUB_SHA} after-restart" ;;
+  mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
+  mt-down) args="mt-down" ;;
+  mt-destroy) args="mt-destroy" ;;
+  inventory) args="inventory ${GITHUB_SHA}" ;;
+  cutover)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the cutover action."
+      exit 1
+    fi
+    args="cutover ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    ;;
+  rollback) args="rollback ${GITHUB_SHA}" ;;
+  saas-check) args="saas-check ${GITHUB_SHA}" ;;
+  saas-check-after-restart) args="saas-check ${GITHUB_SHA} after-restart" ;;
+  saas-restart) args="saas-restart ${GITHUB_SHA}" ;;
+  saas-down) args="saas-down ${GITHUB_SHA}" ;;
+  assistant-prompt)
+    if [[ ! "${ASSISTANT_MODE}" =~ ^(set|reset|show)$ ]]; then
+      echo "::error::assistant_mode must be set, reset or show."; exit 1
+    fi
+    args="assistant-prompt ${GITHUB_SHA} ${ASSISTANT_MODE}"
+    ;;
+  chat-check) args="chat-check ${GITHUB_SHA}" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: chat-check
+  WEB_DOMAIN: http://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  SEALED_MODEL_KEY:
+  ASSISTANT_MODE: show
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T171718Z-chat-check
+
+== vm-bootstrap chat-check 76a1c786cdfcf3fab7690c49d65af5e7a49018fa 2026-10-04T17:17:18Z ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+
+== source at 76a1c786cdfcf3fab7690c49d65af5e7a49018fa ==
+76a1c786cdfcf3fab7690c49d65af5e7a49018fa 2026-10-04T17:15:31+00:00 fix(product): sharper no-information rule for the default assistant
+State of the last verify: /srv/onyx/evidence/20261004T170645Z-chat-check/state.json
+
+== step chat ==
+PASS chat Q1 as user-a@example.com: {"problems": [], "chat_session_id": "2e77bf98-1cc4-434b-8c79-12d0c3083553", "seconds": 46.6, "answer": "I'll look that up in your internal documents.The daily meal allowance for domestic business travel is **INR 1,500 per day** [[1]]().\n\nFor context, the same policy sets a few related limits:\n\n| Item | Amount |\n|---|---|\n| Domestic meal allowance | INR 1,500 per day [[1]]() |\n| International meal allowance | USD 60 per day [[1]]() |\n| Domestic hotel limit | INR 6,000 per night [[1]]() |\n\nA couple of other points worth noting: book travel through the finance desk at least 7 days before departure, trips costing more than INR 75,000 need written director approval, and expense claims must be submitted within 30 days with itemised receipts — claims without receipts aren't paid [[1]]().", "cited": ["expense-policy.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+FAIL chat Q2 as user-a@example.com: {"problems": ["does not state 'saturday'", "does not state '09:00 to 19:00'"], "chat_session_id": "80fb5ce1-0c04-4528-8b4e-a19442a2d080", "seconds": 77.8, "answer": "I'll search for information on this.**WhatsApp Assistant support hours:** Monday to Friday, 10:00–18:00 IST. Support is also reachable by email at support@example.com [[1]]().", "cited": ["whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q3 as user-a@example.com: {"problems": [], "chat_session_id": "01a6b6c2-f34f-47fb-bf97-db3f4b3385ca", "seconds": 48.9, "answer": "I'll look into this for you.**30 days** from the date of purchase.\n\nPer the current Customer Refund Policy (2026 edition, effective 1 June 2026), a customer can request a full refund within 30 days of purchase [[1]](). For reference, here's how the window breaks down:\n\n| Timeframe | What the customer can request |\n|---|---|\n| Days 1–30 | Full refund [[1]]() |\n| Days 31–60 | Store credit only [[1]]() |\n| After day 60 | Nothing specified in the policy [[1]]() |\n\nRefunds are paid to the original payment method within 7 working days [[1]]().\n\n⚠️ One thing worth flagging: this edition **replaced the 2025 edition**, which had a shorter 14-day full-refund window and no store-credit option afterward [[3]](). So if you're looking at any older documentation or training material, the 14-day figure is out of date — 30 days is the number to use for anything from 1 June 2026 onward.", "cited": ["refund-policy-2025.md", "refund-policy-2026.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q4 as user-a@example.com: {"problems": [], "chat_session_id": "c4e61a01-c9b2-4bee-bc2e-988f366502cc", "seconds": 20.9, "answer": "I'll look that up for you.The documents I have access to don't cover a parental leave policy — they include a customer refund policy, an expense and travel policy, and a WhatsApp Assistant product guide, but nothing on parental or family leave. You may want to check with your HR team for the actual policy.", "cited": [], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q5 as user-a@example.com: {"problems": [], "chat_session_id": "c6602050-2c14-4ecc-bd93-c6c65fd4c095", "seconds": 56.1, "answer": "The documents I have access to don't cover salary bands or job-level compensation — the returned files are product, expense/travel, and refund policies, with nothing on engineering levels or pay ranges. I'd recommend checking with your HR or People team (or the internal compensation framework owner) for the L4 Senior Software Engineer band.", "cited": [], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q5 as user-b@example.com in own project: {"problems": [], "chat_session_id": "d2cd0d1b-b26b-4509-8b90-916aaa19fb8a", "seconds": 2.7, "answer": "The salary band for a **Senior Software Engineer at level L4** is **₹38 to 46 lakh** annually [[1]]().", "cited": ["hr-salary-bands-restricted.md"], "retrieved": ["hr-salary-bands-restricted.md"], "error": null}
+FAIL step chat: 1 of 6 checks failed: ["chat Q2 as user-a@example.com"]
+-- step chat: exit 1
+
+== step chat-forced ==
+PASS chat Q1 as user-a@example.com with search forced: {"problems": [], "chat_session_id": "d42cf27b-8eaa-4c87-8047-96c9c8281751", "seconds": 21.3, "answer": "The daily meal allowance for domestic business travel is **INR 1,500 per day** [[1]](). For comparison, the international meal allowance is USD 60 per day, and the domestic hotel limit is INR 6,000 per night [[1]]().\n\nA couple of related points from the same policy that may be useful [[1]]():\n- Claims must be submitted within **30 days** of the trip, with itemised receipts attached — claims without receipts are not paid.\n- Travel should be booked through the finance desk at least **7 days** before departure, and any trip costing more than INR 75,000 requires written director approval.", "cited": ["expense-policy.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+FAIL chat Q2 as user-a@example.com with search forced: {"problems": ["does not state 'saturday'", "does not state '09:00 to 19:00'"], "chat_session_id": "44b62fb4-76ad-44b7-9461-a9db7bf5dc14", "seconds": 71.1, "answer": "**WhatsApp Assistant support hours: Monday to Friday, 10:00 to 18:00 IST** [[1]]().\n\nYou can also reach the team by email at **support@example.com** [[1]]().\n\n> One thing worth noting: the product guide lists these as the *vendor* support hours. Separately, the assistant itself uses the **business hours you configure on the Settings page** to decide when it hands a difficult conversation over to a human agent — so those are set by you, not fixed by WhatsApp Assistant [[1]]().", "cited": ["whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q3 as user-a@example.com with search forced: {"problems": [], "chat_session_id": "4aa47d52-a4f6-44a9-b17a-3e4367b02ba1", "seconds": 24.8, "answer": "**30 days** from the date of purchase [[1]]()[[2]]().\n\nA few related details from the current policy:\n\n| Window | What's available |\n|---|---|\n| Days 1–30 | Full refund [[1]]()[[2]]() |\n| Days 31–60 | Store credit only [[1]]()[[2]]() |\n| After day 60 | Nothing specified |\n\nRefunds are paid to the original payment method within **7 working days** [[1]]()[[2]]().\n\n> ⚠️ Note: This is from the **2026 edition** of the refund policy, effective 1 June 2026. The superseded 2025 edition allowed only **14 days** for a full refund [[3]](), so if you're looking at older documentation or a customer purchased under the previous terms, the shorter window may still apply.", "cited": ["refund-policy-2025.md", "refund-policy-2026.md", "refund-policy-2026.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q4 as user-a@example.com with search forced: {"problems": [], "chat_session_id": "f618bb1e-ae2d-40b2-877d-4f5e5aa868f2", "seconds": 19.8, "answer": "The documents I have access to don't cover a parental leave policy — the results only include customer refund, expense and travel, and product guide documents. If you can point me to the right policy name, team, or source system, I'll search again.", "cited": [], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q5 as user-a@example.com with search forced: {"problems": [], "chat_session_id": "007e0548-04f2-4208-8ae3-fe324032afd3", "seconds": 52.2, "answer": "The documents I have access to don't cover salary bands or job-level compensation — nothing about an L4 Senior Software Engineer pay range is available in them. The material I can search only includes an expense/travel policy, refund policies, and a product guide.\n\nIf you need this, the best route would be your HR or People team's compensation documentation, which doesn't appear to be in the connected sources here.", "cited": [], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+FAIL step chat-forced: 1 of 5 checks failed: ["chat Q2 as user-a@example.com with search forced"]
+-- step chat-forced: exit 1
+
+== summary ==
+step             exit code
+chat             1
+chat-forced      1
+RESULT: FAIL (one or more steps did not exit with 0)
+##[error]Process completed with exit code 1.
