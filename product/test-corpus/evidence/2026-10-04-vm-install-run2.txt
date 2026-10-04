@@ -1,0 +1,584 @@
+# Bootstrap dev VM run 2 (install), commit f03e1626f82250a4a6facfdc9f2935ffc73125d7, GitHub Actions job 111431410349
+# https://github.com/ravi3594444/onyx1/actions/runs/37200626408
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: install
+  WEB_DOMAIN: http://my-knowledge.duckdns.org
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+
+== Docker Engine ==
+Get:1 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy InRelease [270 kB]
+Get:2 http://security.ubuntu.com/ubuntu jammy-security InRelease [129 kB]
+Get:3 http://security.ubuntu.com/ubuntu jammy-security/main amd64 Packages [3598 kB]
+Get:4 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates InRelease [128 kB]
+Get:5 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-backports InRelease [127 kB]
+Get:6 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/main amd64 Packages [1395 kB]
+Get:7 http://security.ubuntu.com/ubuntu jammy-security/main Translation-en [504 kB]
+Get:8 http://security.ubuntu.com/ubuntu jammy-security/restricted amd64 Packages [6410 kB]
+Get:9 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/main Translation-en [510 kB]
+Get:10 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/restricted amd64 Packages [129 kB]
+Get:11 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/restricted Translation-en [18.6 kB]
+Get:12 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/universe amd64 Packages [14.1 MB]
+Get:13 http://security.ubuntu.com/ubuntu jammy-security/restricted Translation-en [1232 kB]
+Get:14 http://security.ubuntu.com/ubuntu jammy-security/universe amd64 Packages [1052 kB]
+Get:15 http://security.ubuntu.com/ubuntu jammy-security/universe Translation-en [236 kB]
+Get:16 http://security.ubuntu.com/ubuntu jammy-security/multiverse amd64 Packages [69.4 kB]
+Get:17 http://security.ubuntu.com/ubuntu jammy-security/multiverse Translation-en [12.9 kB]
+Get:18 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/universe Translation-en [5652 kB]
+Get:19 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/multiverse amd64 Packages [217 kB]
+Get:20 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/multiverse Translation-en [112 kB]
+Get:21 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 Packages [3899 kB]
+Get:22 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main Translation-en [575 kB]
+Get:23 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/restricted amd64 Packages [6701 kB]
+Get:24 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/restricted Translation-en [1287 kB]
+Get:25 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/universe amd64 Packages [1285 kB]
+Get:26 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/universe Translation-en [325 kB]
+Get:27 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/multiverse amd64 Packages [76.8 kB]
+Get:28 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/multiverse Translation-en [15.9 kB]
+Get:29 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-backports/main amd64 Packages [70.2 kB]
+Get:30 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-backports/main Translation-en [11.4 kB]
+Get:31 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-backports/universe amd64 Packages [30.8 kB]
+Get:32 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-backports/universe Translation-en [16.9 kB]
+Fetched 50.2 MB in 6s (8149 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+ca-certificates is already the newest version (20260601~22.04.1).
+ca-certificates set to manually installed.
+The following additional packages will be installed:
+  git-man less libcurl3-gnutls libcurl4 liberror-perl
+Suggested packages:
+  git-daemon-run | git-daemon-sysvinit git-doc git-email git-gui gitk gitweb
+  git-cvs git-mediawiki git-svn
+The following NEW packages will be installed:
+  git git-man less libcurl3-gnutls liberror-perl
+The following packages will be upgraded:
+  curl libcurl4
+2 upgraded, 5 newly installed, 0 to remove and 14 not upgraded.
+Need to get 5069 kB of archives.
+After this operation, 22.1 MB of additional disk space will be used.
+Get:1 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 less amd64 590-1ubuntu0.22.04.3 [142 kB]
+Get:2 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 curl amd64 7.81.0-1ubuntu1.29 [194 kB]
+Get:3 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libcurl4 amd64 7.81.0-1ubuntu1.29 [292 kB]
+Get:4 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libcurl3-gnutls amd64 7.81.0-1ubuntu1.29 [286 kB]
+Get:5 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/main amd64 liberror-perl all 0.17029-1 [26.5 kB]
+Get:6 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 git-man all 1:2.34.1-1ubuntu1.17 [954 kB]
+Get:7 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 git amd64 1:2.34.1-1ubuntu1.17 [3174 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 5069 kB in 0s (10.9 MB/s)
+Selecting previously unselected package less.
+(Reading database ...
+(Reading database ... 5%
+(Reading database ... 10%
+(Reading database ... 15%
+(Reading database ... 20%
+(Reading database ... 25%
+(Reading database ... 30%
+(Reading database ... 35%
+(Reading database ... 40%
+(Reading database ... 45%
+(Reading database ... 50%
+(Reading database ... 55%
+(Reading database ... 60%
+(Reading database ... 65%
+(Reading database ... 70%
+(Reading database ... 75%
+(Reading database ... 80%
+(Reading database ... 85%
+(Reading database ... 90%
+(Reading database ... 95%
+(Reading database ... 100%
+(Reading database ... 52452 files and directories currently installed.)
+Preparing to unpack .../0-less_590-1ubuntu0.22.04.3_amd64.deb ...
+Unpacking less (590-1ubuntu0.22.04.3) ...
+Preparing to unpack .../1-curl_7.81.0-1ubuntu1.29_amd64.deb ...
+Unpacking curl (7.81.0-1ubuntu1.29) over (7.81.0-1ubuntu1.27) ...
+Preparing to unpack .../2-libcurl4_7.81.0-1ubuntu1.29_amd64.deb ...
+Unpacking libcurl4:amd64 (7.81.0-1ubuntu1.29) over (7.81.0-1ubuntu1.27) ...
+Selecting previously unselected package libcurl3-gnutls:amd64.
+Preparing to unpack .../3-libcurl3-gnutls_7.81.0-1ubuntu1.29_amd64.deb ...
+Unpacking libcurl3-gnutls:amd64 (7.81.0-1ubuntu1.29) ...
+Selecting previously unselected package liberror-perl.
+Preparing to unpack .../4-liberror-perl_0.17029-1_all.deb ...
+Unpacking liberror-perl (0.17029-1) ...
+Selecting previously unselected package git-man.
+Preparing to unpack .../5-git-man_1%3a2.34.1-1ubuntu1.17_all.deb ...
+Unpacking git-man (1:2.34.1-1ubuntu1.17) ...
+Selecting previously unselected package git.
+Preparing to unpack .../6-git_1%3a2.34.1-1ubuntu1.17_amd64.deb ...
+Unpacking git (1:2.34.1-1ubuntu1.17) ...
+Setting up less (590-1ubuntu0.22.04.3) ...
+Setting up libcurl3-gnutls:amd64 (7.81.0-1ubuntu1.29) ...
+Setting up liberror-perl (0.17029-1) ...
+Setting up libcurl4:amd64 (7.81.0-1ubuntu1.29) ...
+Setting up git-man (1:2.34.1-1ubuntu1.17) ...
+Setting up curl (7.81.0-1ubuntu1.29) ...
+Setting up git (1:2.34.1-1ubuntu1.17) ...
+Processing triggers for libc-bin (2.35-0ubuntu3.15) ...
+
+Running kernel seems to be up-to-date.
+
+No services need to be restarted.
+
+No containers need to be restarted.
+
+No user sessions are running outdated binaries.
+
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+Hit:1 http://security.ubuntu.com/ubuntu jammy-security InRelease
+Get:2 https://download.docker.com/linux/ubuntu jammy InRelease [48.5 kB]
+Get:3 https://download.docker.com/linux/ubuntu jammy/stable amd64 Packages [88.5 kB]
+Hit:4 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy InRelease
+Hit:5 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates InRelease
+Get:6 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-backports InRelease [127 kB]
+Fetched 264 kB in 1s (294 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  docker-ce-rootless-extras iptables libip6tc2 libjansson4
+  libnetfilter-conntrack3 libnfnetlink0 libnftables1 libnftnl11 nftables pigz
+Suggested packages:
+  cgroupfs-mount | cgroup-lite docker-model-plugin firewalld
+The following NEW packages will be installed:
+  containerd.io docker-buildx-plugin docker-ce docker-ce-cli
+  docker-ce-rootless-extras docker-compose-plugin iptables libip6tc2
+  libjansson4 libnetfilter-conntrack3 libnfnetlink0 libnftables1 libnftnl11
+  nftables pigz
+0 upgraded, 15 newly installed, 0 to remove and 14 not upgraded.
+Need to get 102 MB of archives.
+After this operation, 388 MB of additional disk space will be used.
+Get:1 https://download.docker.com/linux/ubuntu jammy/stable amd64 containerd.io amd64 2.3.6-1~ubuntu.22.04~jammy [23.2 MB]
+Get:2 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libip6tc2 amd64 1.8.7-1ubuntu5.2 [20.3 kB]
+Get:3 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/main amd64 libnfnetlink0 amd64 1.0.1-3build3 [14.6 kB]
+Get:4 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/main amd64 libnetfilter-conntrack3 amd64 1.0.9-1 [45.3 kB]
+Get:5 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/main amd64 libnftnl11 amd64 1.2.1-1build1 [65.5 kB]
+Get:6 https://download.docker.com/linux/ubuntu jammy/stable amd64 docker-ce-cli amd64 5:29.8.2-1~ubuntu.22.04~jammy [17.6 MB]
+Get:7 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 iptables amd64 1.8.7-1ubuntu5.2 [455 kB]
+Get:8 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/main amd64 libjansson4 amd64 2.13.1-1.1build3 [32.4 kB]
+Get:9 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libnftables1 amd64 1.0.2-1ubuntu3.1 [332 kB]
+Get:10 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy-updates/main amd64 nftables amd64 1.0.2-1ubuntu3.1 [67.2 kB]
+Get:11 https://download.docker.com/linux/ubuntu jammy/stable amd64 docker-ce amd64 5:29.8.2-1~ubuntu.22.04~jammy [24.4 MB]
+Get:12 http://europe-north2-a.gce.clouds.archive.ubuntu.com/ubuntu jammy/universe amd64 pigz amd64 2.6-1 [63.6 kB]
+Get:13 https://download.docker.com/linux/ubuntu jammy/stable amd64 docker-buildx-plugin amd64 0.37.1-1~ubuntu.22.04~jammy [17.3 MB]
+Get:14 https://download.docker.com/linux/ubuntu jammy/stable amd64 docker-ce-rootless-extras amd64 5:29.8.2-1~ubuntu.22.04~jammy [10.2 MB]
+Get:15 https://download.docker.com/linux/ubuntu jammy/stable amd64 docker-compose-plugin amd64 5.6.0-1~ubuntu.22.04~jammy [8081 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 102 MB in 1s (137 MB/s)
+Selecting previously unselected package containerd.io.
+(Reading database ...
+(Reading database ... 5%
+(Reading database ... 10%
+(Reading database ... 15%
+(Reading database ... 20%
+(Reading database ... 25%
+(Reading database ... 30%
+(Reading database ... 35%
+(Reading database ... 40%
+(Reading database ... 45%
+(Reading database ... 50%
+(Reading database ... 55%
+(Reading database ... 60%
+(Reading database ... 65%
+(Reading database ... 70%
+(Reading database ... 75%
+(Reading database ... 80%
+(Reading database ... 85%
+(Reading database ... 90%
+(Reading database ... 95%
+(Reading database ... 100%
+(Reading database ... 53462 files and directories currently installed.)
+Preparing to unpack .../00-containerd.io_2.3.6-1~ubuntu.22.04~jammy_amd64.deb ...
+Unpacking containerd.io (2.3.6-1~ubuntu.22.04~jammy) ...
+Selecting previously unselected package docker-ce-cli.
+Preparing to unpack .../01-docker-ce-cli_5%3a29.8.2-1~ubuntu.22.04~jammy_amd64.deb ...
+Unpacking docker-ce-cli (5:29.8.2-1~ubuntu.22.04~jammy) ...
+Selecting previously unselected package libip6tc2:amd64.
+Preparing to unpack .../02-libip6tc2_1.8.7-1ubuntu5.2_amd64.deb ...
+Unpacking libip6tc2:amd64 (1.8.7-1ubuntu5.2) ...
+Selecting previously unselected package libnfnetlink0:amd64.
+Preparing to unpack .../03-libnfnetlink0_1.0.1-3build3_amd64.deb ...
+Unpacking libnfnetlink0:amd64 (1.0.1-3build3) ...
+Selecting previously unselected package libnetfilter-conntrack3:amd64.
+Preparing to unpack .../04-libnetfilter-conntrack3_1.0.9-1_amd64.deb ...
+Unpacking libnetfilter-conntrack3:amd64 (1.0.9-1) ...
+Selecting previously unselected package libnftnl11:amd64.
+Preparing to unpack .../05-libnftnl11_1.2.1-1build1_amd64.deb ...
+Unpacking libnftnl11:amd64 (1.2.1-1build1) ...
+Selecting previously unselected package iptables.
+Preparing to unpack .../06-iptables_1.8.7-1ubuntu5.2_amd64.deb ...
+Unpacking iptables (1.8.7-1ubuntu5.2) ...
+Selecting previously unselected package libjansson4:amd64.
+Preparing to unpack .../07-libjansson4_2.13.1-1.1build3_amd64.deb ...
+Unpacking libjansson4:amd64 (2.13.1-1.1build3) ...
+Selecting previously unselected package libnftables1:amd64.
+Preparing to unpack .../08-libnftables1_1.0.2-1ubuntu3.1_amd64.deb ...
+Unpacking libnftables1:amd64 (1.0.2-1ubuntu3.1) ...
+Selecting previously unselected package nftables.
+Preparing to unpack .../09-nftables_1.0.2-1ubuntu3.1_amd64.deb ...
+Unpacking nftables (1.0.2-1ubuntu3.1) ...
+Selecting previously unselected package docker-ce.
+Preparing to unpack .../10-docker-ce_5%3a29.8.2-1~ubuntu.22.04~jammy_amd64.deb ...
+Unpacking docker-ce (5:29.8.2-1~ubuntu.22.04~jammy) ...
+Selecting previously unselected package pigz.
+Preparing to unpack .../11-pigz_2.6-1_amd64.deb ...
+Unpacking pigz (2.6-1) ...
+Selecting previously unselected package docker-buildx-plugin.
+Preparing to unpack .../12-docker-buildx-plugin_0.37.1-1~ubuntu.22.04~jammy_amd64.deb ...
+Unpacking docker-buildx-plugin (0.37.1-1~ubuntu.22.04~jammy) ...
+Selecting previously unselected package docker-ce-rootless-extras.
+Preparing to unpack .../13-docker-ce-rootless-extras_5%3a29.8.2-1~ubuntu.22.04~jammy_amd64.deb ...
+Unpacking docker-ce-rootless-extras (5:29.8.2-1~ubuntu.22.04~jammy) ...
+Selecting previously unselected package docker-compose-plugin.
+Preparing to unpack .../14-docker-compose-plugin_5.6.0-1~ubuntu.22.04~jammy_amd64.deb ...
+Unpacking docker-compose-plugin (5.6.0-1~ubuntu.22.04~jammy) ...
+Setting up libip6tc2:amd64 (1.8.7-1ubuntu5.2) ...
+Setting up libnftnl11:amd64 (1.2.1-1build1) ...
+Setting up libjansson4:amd64 (2.13.1-1.1build3) ...
+Setting up docker-buildx-plugin (0.37.1-1~ubuntu.22.04~jammy) ...
+Setting up containerd.io (2.3.6-1~ubuntu.22.04~jammy) ...
+Created symlink /etc/systemd/system/multi-user.target.wants/containerd.service → /lib/systemd/system/containerd.service.
+Setting up docker-compose-plugin (5.6.0-1~ubuntu.22.04~jammy) ...
+Setting up docker-ce-cli (5:29.8.2-1~ubuntu.22.04~jammy) ...
+Setting up pigz (2.6-1) ...
+Setting up libnfnetlink0:amd64 (1.0.1-3build3) ...
+Setting up docker-ce-rootless-extras (5:29.8.2-1~ubuntu.22.04~jammy) ...
+Setting up libnftables1:amd64 (1.0.2-1ubuntu3.1) ...
+Setting up nftables (1.0.2-1ubuntu3.1) ...
+Setting up libnetfilter-conntrack3:amd64 (1.0.9-1) ...
+Setting up iptables (1.8.7-1ubuntu5.2) ...
+update-alternatives: using /usr/sbin/iptables-legacy to provide /usr/sbin/iptables (iptables) in auto mode
+update-alternatives: using /usr/sbin/ip6tables-legacy to provide /usr/sbin/ip6tables (ip6tables) in auto mode
+update-alternatives: using /usr/sbin/iptables-nft to provide /usr/sbin/iptables (iptables) in auto mode
+update-alternatives: using /usr/sbin/ip6tables-nft to provide /usr/sbin/ip6tables (ip6tables) in auto mode
+update-alternatives: using /usr/sbin/arptables-nft to provide /usr/sbin/arptables (arptables) in auto mode
+update-alternatives: using /usr/sbin/ebtables-nft to provide /usr/sbin/ebtables (ebtables) in auto mode
+Setting up docker-ce (5:29.8.2-1~ubuntu.22.04~jammy) ...
+Created symlink /etc/systemd/system/multi-user.target.wants/docker.service → /lib/systemd/system/docker.service.
+Created symlink /etc/systemd/system/sockets.target.wants/docker.socket → /lib/systemd/system/docker.socket.
+Processing triggers for libc-bin (2.35-0ubuntu3.15) ...
+
+Running kernel seems to be up-to-date.
+
+No services need to be restarted.
+
+No containers need to be restarted.
+
+No user sessions are running outdated binaries.
+
+No VM guests are running outdated hypervisor (qemu) binaries on this host.
+Synchronizing state of docker.service with SysV service script with /lib/systemd/systemd-sysv-install.
+Executing: /lib/systemd/systemd-sysv-install enable docker
+*** is in the docker group. A new login applies it.
+
+== host settings ==
+sysctl: setting key "net.ipv4.conf.all.accept_source_route": Invalid argument
+sysctl: setting key "net.ipv4.conf.all.promote_secondaries": Invalid argument
+vm.max_map_count = 262144
+
+== source at f03e1626f82250a4a6facfdc9f2935ffc73125d7 ==
+Cloning into '/srv/onyx-src'...
+Updating files:   0% (2/8389)
+Updating files:   1% (84/8389)
+Updating files:   2% (168/8389)
+Updating files:   3% (252/8389)
+Updating files:   4% (336/8389)
+Updating files:   5% (420/8389)
+Updating files:   6% (504/8389)
+Updating files:   7% (588/8389)
+Updating files:   8% (672/8389)
+Updating files:   9% (756/8389)
+Updating files:  10% (839/8389)
+Updating files:  11% (923/8389)
+Updating files:  12% (1007/8389)
+Updating files:  13% (1091/8389)
+Updating files:  14% (1175/8389)
+Updating files:  15% (1259/8389)
+Updating files:  16% (1343/8389)
+Updating files:  17% (1427/8389)
+Updating files:  18% (1511/8389)
+Updating files:  19% (1594/8389)
+Updating files:  20% (1678/8389)
+Updating files:  21% (1762/8389)
+Updating files:  22% (1846/8389)
+Updating files:  23% (1930/8389)
+Updating files:  24% (2014/8389)
+Updating files:  25% (2098/8389)
+Updating files:  26% (2182/8389)
+Updating files:  27% (2266/8389)
+Updating files:  28% (2349/8389)
+Updating files:  29% (2433/8389)
+Updating files:  30% (2517/8389)
+Updating files:  31% (2601/8389)
+Updating files:  32% (2685/8389)
+Updating files:  33% (2769/8389)
+Updating files:  34% (2853/8389)
+Updating files:  35% (2937/8389)
+Updating files:  36% (3021/8389)
+Updating files:  37% (3104/8389)
+Updating files:  38% (3188/8389)
+Updating files:  39% (3272/8389)
+Updating files:  40% (3356/8389)
+Updating files:  41% (3440/8389)
+Updating files:  42% (3524/8389)
+Updating files:  43% (3608/8389)
+Updating files:  44% (3692/8389)
+Updating files:  45% (3776/8389)
+Updating files:  46% (3859/8389)
+Updating files:  47% (3943/8389)
+Updating files:  48% (4027/8389)
+Updating files:  49% (4111/8389)
+Updating files:  50% (4195/8389)
+Updating files:  51% (4279/8389)
+Updating files:  52% (4363/8389)
+Updating files:  53% (4447/8389)
+Updating files:  54% (4531/8389)
+Updating files:  55% (4614/8389)
+Updating files:  56% (4698/8389)
+Updating files:  57% (4782/8389)
+Updating files:  58% (4866/8389)
+Updating files:  59% (4950/8389)
+Updating files:  60% (5034/8389)
+Updating files:  61% (5118/8389)
+Updating files:  62% (5202/8389)
+Updating files:  63% (5286/8389)
+Updating files:  64% (5369/8389)
+Updating files:  65% (5453/8389)
+Updating files:  66% (5537/8389)
+Updating files:  67% (5621/8389)
+Updating files:  68% (5705/8389)
+Updating files:  69% (5789/8389)
+Updating files:  70% (5873/8389)
+Updating files:  71% (5957/8389)
+Updating files:  72% (6041/8389)
+Updating files:  73% (6124/8389)
+Updating files:  74% (6208/8389)
+Updating files:  75% (6292/8389)
+Updating files:  76% (6376/8389)
+Updating files:  77% (6460/8389)
+Updating files:  78% (6544/8389)
+Updating files:  79% (6628/8389)
+Updating files:  80% (6712/8389)
+Updating files:  81% (6796/8389)
+Updating files:  82% (6879/8389)
+Updating files:  83% (6963/8389)
+Updating files:  84% (7047/8389)
+Updating files:  85% (7131/8389)
+Updating files:  86% (7215/8389)
+Updating files:  87% (7299/8389)
+Updating files:  88% (7383/8389)
+Updating files:  89% (7467/8389)
+Updating files:  90% (7551/8389)
+Updating files:  91% (7634/8389)
+Updating files:  92% (7718/8389)
+Updating files:  93% (7802/8389)
+Updating files:  94% (7886/8389)
+Updating files:  95% (7970/8389)
+Updating files:  96% (8054/8389)
+Updating files:  97% (8138/8389)
+Updating files:  98% (8222/8389)
+Updating files:  99% (8306/8389)
+Updating files: 100% (8389/8389)
+Updating files: 100% (8389/8389), done.
+f03e1626f82250a4a6facfdc9f2935ffc73125d7 2026-10-04T11:49:42+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': reviewed product deployment work
+
+== release files v4.8.4 into /srv/onyx/deployment/docker_compose ==
+Exported v4.8.4 (d15d4451607965e0e349aad231f858596e85ea52) and compose.override.yml.
+Created /srv/onyx/deployment/docker_compose/.env for Onyx v4.8.4. Keep a secure copy of it.
+
+== published ports ==
+port 80: free
+port 3000: free
+
+== docker compose pull ==
+ Image onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd Pulling
+ Image docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5 Pulling
+ Image docker.io/opensearchproject/opensearch:3.6.0 Pulling
+ Image docker.io/library/redis:7.4-alpine Pulling
+ Image docker.io/library/nginx:1.25.5-alpine Pulling
+ Image docker.io/library/postgres:15.2-alpine Pulling
+ Image onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850 Pulling
+ Image onyxdotapp/onyx-web-server:v4.8.4@sha256:9a5049f57dae444fa0c7bacbea60174598af8d6e624579ff45a0bbd26975a030 Pulling
+ Image docker.io/library/redis:7.4-alpine Pulled
+ Image docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5 Pulled
+ Image docker.io/library/nginx:1.25.5-alpine Pulled
+ Image docker.io/library/postgres:15.2-alpine Pulled
+ Image onyxdotapp/onyx-web-server:v4.8.4@sha256:9a5049f57dae444fa0c7bacbea60174598af8d6e624579ff45a0bbd26975a030 Pulled
+ Image docker.io/opensearchproject/opensearch:3.6.0 Pulled
+ Image onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd Pulled
+ Image onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850 Pulled
+
+== docker compose up -d ==
+ Network onyx_default Creating
+ Volume onyx_opensearch-data Creating
+ Network onyx_default Creating
+ Volume onyx_opensearch-data Creating
+ Volume onyx_db_volume Creating
+ Volume onyx_db_volume Creating
+ Volume onyx_background_logs Creating
+ Volume onyx_background_logs Creating
+ Volume onyx_indexing_model_server_logs Creating
+ Volume onyx_minio_data Creating
+ Volume onyx_indexing_huggingface_model_cache Creating
+ Volume onyx_indexing_huggingface_model_cache Creating
+ Volume onyx_indexing_model_server_logs Creating
+ Volume onyx_minio_data Creating
+ Volume onyx_model_cache_huggingface Creating
+ Volume onyx_model_cache_huggingface Creating
+ Volume onyx_file-system Creating
+ Volume onyx_file-system Creating
+ Volume onyx_inference_model_server_logs Creating
+ Volume onyx_inference_model_server_logs Creating
+ Volume onyx_api_server_logs Creating
+ Volume onyx_api_server_logs Creating
+ Volume onyx_db_volume Created
+ Volume onyx_db_volume Created
+ Volume onyx_opensearch-data Created
+ Volume onyx_opensearch-data Created
+ Volume onyx_indexing_model_server_logs Created
+ Volume onyx_indexing_model_server_logs Created
+ Volume onyx_background_logs Created
+ Volume onyx_background_logs Created
+ Volume onyx_file-system Created
+ Volume onyx_file-system Created
+ Volume onyx_minio_data Created
+ Volume onyx_minio_data Created
+ Volume onyx_api_server_logs Created
+ Volume onyx_api_server_logs Created
+ Volume onyx_inference_model_server_logs Created
+ Volume onyx_inference_model_server_logs Created
+ Volume onyx_indexing_huggingface_model_cache Created
+ Volume onyx_indexing_huggingface_model_cache Created
+ Volume onyx_model_cache_huggingface Created
+ Volume onyx_model_cache_huggingface Created
+ Network onyx_default Created
+ Network onyx_default Created
+ Container onyx-relational_db-1 Creating
+ Container onyx-inference_model_server-1 Creating
+ Container onyx-indexing_model_server-1 Creating
+ Container onyx-minio-1 Creating
+ Container onyx-opensearch-1 Creating
+ Container onyx-cache-1 Creating
+ Container onyx-minio-1 Created
+ Container onyx-opensearch-1 Created
+ Container onyx-cache-1 Created
+ Container onyx-relational_db-1 Created
+ Container onyx-indexing_model_server-1 Created
+ Container onyx-inference_model_server-1 Created
+ Container onyx-api_server-1 Creating
+ Container onyx-background-1 Creating
+ Container onyx-background-1 Created
+ Container onyx-api_server-1 Created
+ Container onyx-web_server-1 Creating
+ Container onyx-web_server-1 Created
+ Container onyx-nginx-1 Creating
+ Container onyx-nginx-1 Created
+ Container onyx-inference_model_server-1 Starting
+ Container onyx-opensearch-1 Starting
+ Container onyx-cache-1 Starting
+ Container onyx-minio-1 Starting
+ Container onyx-relational_db-1 Starting
+ Container onyx-indexing_model_server-1 Starting
+ Container onyx-inference_model_server-1 Started
+ Container onyx-opensearch-1 Started
+ Container onyx-cache-1 Started
+ Container onyx-minio-1 Started
+ Container onyx-relational_db-1 Started
+ Container onyx-api_server-1 Starting
+ Container onyx-indexing_model_server-1 Started
+ Container onyx-background-1 Starting
+ Container onyx-background-1 Started
+ Container onyx-api_server-1 Started
+ Container onyx-web_server-1 Starting
+ Container onyx-web_server-1 Started
+ Container onyx-api_server-1 Waiting
+ Container onyx-web_server-1 Waiting
+ Container onyx-web_server-1 Healthy
+ Container onyx-api_server-1 Healthy
+ Container onyx-nginx-1 Starting
+ Container onyx-nginx-1 Started
+http://localhost:3000/api/health answers 200.
+
+== docker compose ps ==
+NAME                            IMAGE                                                                                                                                   COMMAND                  SERVICE                  CREATED              STATUS                        PORTS
+onyx-api_server-1               onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd                                  "/bin/sh -c 'alembic…"   api_server               About a minute ago   Up About a minute (healthy)
+onyx-background-1               onyxdotapp/onyx-backend:v4.8.4@sha256:df7dbe02631587c9383ccdb07faa39a69f572e58eeb895f0df6ded9778b0aafd                                  "/bin/sh -c ' if [ -…"   background               About a minute ago   Up About a minute
+onyx-cache-1                    docker.io/library/redis:7.4-alpine                                                                                                      "docker-entrypoint.s…"   cache                    About a minute ago   Up About a minute             6379/tcp
+onyx-indexing_model_server-1    onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   indexing_model_server    About a minute ago   Up About a minute (healthy)
+onyx-inference_model_server-1   onyxdotapp/onyx-model-server:v4.8.4@sha256:2acf61ff814007071be9c941f09855df377c9ba411bfd356b11c92c479b47850                             "python -m model_ser…"   inference_model_server   About a minute ago   Up About a minute (healthy)
+onyx-minio-1                    docker.io/onyxdotapp/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5   "/usr/bin/docker-ent…"   minio                    About a minute ago   Up About a minute (healthy)   9000/tcp
+onyx-nginx-1                    docker.io/library/nginx:1.25.5-alpine                                                                                                   "/docker-entrypoint.…"   nginx                    About a minute ago   Up 10 seconds (healthy)       0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:3000->80/tcp, [::]:3000->80/tcp
+onyx-opensearch-1               docker.io/opensearchproject/opensearch:3.6.0                                                                                            "./opensearch-docker…"   opensearch               About a minute ago   Up About a minute             9200/tcp, 9300/tcp, 9600/tcp, 9650/tcp
+onyx-relational_db-1            docker.io/library/postgres:15.2-alpine                                                                                                  "docker-entrypoint.s…"   relational_db            About a minute ago   Up About a minute (healthy)   5432/tcp
+onyx-web_server-1               onyxdotapp/onyx-web-server:v4.8.4@sha256:9a5049f57dae444fa0c7bacbea60174598af8d6e624579ff45a0bbd26975a030                               "node server.js"         web_server               About a minute ago   Up About a minute (healthy)
+
+== docker compose images ==
+CONTAINER                       REPOSITORY                     TAG                 PLATFORM            IMAGE ID            SIZE                CREATED
+onyx-api_server-1               onyxdotapp/onyx-backend        <none>              linux/amd64         df7dbe026315        2.61GB              39 hours ago
+onyx-background-1               onyxdotapp/onyx-backend        <none>              linux/amd64         df7dbe026315        2.61GB              39 hours ago
+onyx-cache-1                    redis                          7.4-alpine          linux/amd64         858f009f9709        57.3MB              2 weeks ago
+onyx-indexing_model_server-1    onyxdotapp/onyx-model-server   <none>              linux/amd64         2acf61ff8140        13.1GB              39 hours ago
+onyx-inference_model_server-1   onyxdotapp/onyx-model-server   <none>              linux/amd64         2acf61ff8140        13.1GB              39 hours ago
+onyx-minio-1                    onyxdotapp/minio               <none>              linux/amd64         7330be2e7320        246MB               14 months ago
+onyx-nginx-1                    nginx                          1.25.5-alpine       linux/amd64         516475cc129d        74.1MB              2 years ago
+onyx-opensearch-1               opensearchproject/opensearch   3.6.0               linux/amd64         b5dd1512af2a        2.77GB              4 months ago
+onyx-relational_db-1            postgres                       15.2-alpine         linux/amd64         d9c304353c03        347MB               3 years ago
+onyx-web_server-1               onyxdotapp/onyx-web-server     <none>              linux/amd64         9a5049f57dae        328MB               39 hours ago
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi       6.4Gi       295Mi        30Mi       8.9Gi       8.7Gi
+Swap:             0B          0B          0B
+
+== disk / ==
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        97G   23G   75G  23% /
+
+== install complete: f03e1626f82250a4a6facfdc9f2935ffc73125d7 with v4.8.4 at http://my-knowledge.duckdns.org ==

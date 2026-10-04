@@ -1,0 +1,128 @@
+# Bootstrap dev VM run 5 (https, failed), commit d840c58cc012826bce5fd58e8c41c7e6fe95b705, GitHub Actions job 111440349621
+# https://github.com/ravi3594444/onyx1/actions/runs/37203682883
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: https
+  WEB_DOMAIN: https://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL: ravi80847949@gmail.com
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+
+== vm-bootstrap https my-knowledge.duckdns.org d840c58cc012826bce5fd58e8c41c7e6fe95b705 2026-10-04T12:53:49Z (mode=production) ==
+
+== source at d840c58cc012826bce5fd58e8c41c7e6fe95b705 ==
+d840c58cc012826bce5fd58e8c41c7e6fe95b705 2026-10-04T12:53:29+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': replace a staging certificate
+PASS: my-knowledge.duckdns.org resolves to this host (***).
+PASS: .env sets DOMAIN=my-knowledge.duckdns.org, WEB_DOMAIN=https://my-knowledge.duckdns.org, COMPOSE_FILE=docker-compose.yml:compose.override.yml:compose.https.yml.
+PASS: options-ssl-nginx.conf and ssl-dhparams.pem are in /srv/onyx/deployment/data/certbot/conf.
+PASS: redirect block for my-knowledge.duckdns.org is in /srv/onyx/deployment/data/nginx-extra/redirect.conf.
+A certificate exists at /etc/letsencrypt/live/my-knowledge.duckdns.org/fullchain.pem.
+ Container onyx-cache-1 Running
+ Container onyx-background-1 Running
+ Container onyx-certbot-1 Running
+ Container onyx-inference_model_server-1 Running
+ Container onyx-opensearch-1 Running
+ Container onyx-web_server-1 Running
+ Container onyx-minio-1 Running
+ Container onyx-indexing_model_server-1 Running
+ Container onyx-relational_db-1 Running
+ Container onyx-nginx-1 Running
+ Container onyx-api_server-1 Running
+ Container onyx-web_server-1 Waiting
+ Container onyx-api_server-1 Waiting
+ Container onyx-api_server-1 Healthy
+ Container onyx-web_server-1 Healthy
+PASS: nginx answers on port 80.
+The certificate is from the Let's Encrypt staging CA. Replacing it with a trusted one.
+ Container onyx-certbot-run-209c7ca800fc Creating
+ Container onyx-certbot-run-209c7ca800fc Created
+Saving debug log to /var/log/letsencrypt/letsencrypt.log
+Account registered.
+Renewing an existing certificate for my-knowledge.duckdns.org
+
+Successfully received certificate.
+Certificate is saved at: /etc/letsencrypt/live/my-knowledge.duckdns.org/fullchain.pem
+Key is saved at:         /etc/letsencrypt/live/my-knowledge.duckdns.org/privkey.pem
+This certificate expires on 2027-01-02.
+These files will be updated when the certificate renews.
+NEXT STEPS:
+- The certificate will need to be renewed before it expires. Certbot can automatically renew the certificate in the background, but you may need to take steps to enable that functionality. See https://certbot.org/renewal-setup for instructions.
+
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+If you like Certbot, please consider supporting our work by:
+ * Donating to ISRG / Let's Encrypt:   https://letsencrypt.org/donate
+ * Donating to EFF:                    https://eff.org/donate-le
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+2026/10/04 12:54:04 [notice] 123#123: signal process started
+PASS: Trusted Let's Encrypt certificate issued. nginx reloaded.
+curl: (60) SSL certificate problem: unable to get local issuer certificate
+More details here: https://curl.se/docs/sslcerts.html
+
+curl failed to verify the legitimacy of the server and therefore could not
+establish a secure connection to it. To learn more about this situation and
+how to fix it, please visit the web page mentioned above.
+FAIL: https://my-knowledge.duckdns.org/nginx-health does not answer 200.
+curl: (60) SSL certificate problem: unable to get local issuer certificate
+More details here: https://curl.se/docs/sslcerts.html
+
+curl failed to verify the legitimacy of the server and therefore could not
+establish a secure connection to it. To learn more about this situation and
+how to fix it, please visit the web page mentioned above.
+FAIL: https://my-knowledge.duckdns.org/api/health does not answer 200.
+PASS: http://my-knowledge.duckdns.org/ redirects (301).
+FAIL: HTTPS setup is not complete.
+##[error]Process completed with exit code 1.

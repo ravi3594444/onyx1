@@ -23,7 +23,7 @@ readonly COMPOSE_DIR="${ONYX_DEPLOY_DIR}/deployment/docker_compose"
 readonly RESTORE_COMPOSE_DIR="${ONYX_RESTORE_DIR}/deployment/docker_compose"
 readonly FORK_URL=https://github.com/ravi3594444/onyx1
 readonly UPSTREAM_URL=https://github.com/onyx-dot-app/onyx
-# set_live_url reads .env: port 80 with the HTTPS overlay, else HOST_PORT.
+# set_live_url reads .env: the public HTTPS URL with the HTTPS overlay, else HOST_PORT.
 LIVE_URL=http://localhost:3000
 readonly RESTORE_URL=http://localhost:3100
 readonly RESTORE_PROJECT=onyx-restore
@@ -316,7 +316,8 @@ export_release_files() {
 # With compose.https.yml in COMPOSE_FILE, nginx publishes only ports 80 and 443.
 set_live_url() {
   if [[ "$(live_env_value COMPOSE_FILE "")" == *compose.https.yml* ]]; then
-    LIVE_URL=http://localhost
+    # The checks then use the public URL, with a trusted certificate, like a user does.
+    LIVE_URL="https://${DNS_NAME}"
   else
     LIVE_URL="http://localhost:$(live_env_value HOST_PORT 3000)"
   fi
@@ -555,10 +556,12 @@ list_test_cc_pairs() {
   [[ "${code}" == 200 ]] || { echo "indexing-status returned ${code}" >&2; return 1; }
   python3 -c '
 import json, sys
-names = set(sys.argv[2:])
+# prune_race.py adds a time stamp to its connector name, so a prefix also matches.
+names = sys.argv[2:]
 for group in json.load(open(sys.argv[1])):
     for entry in group.get("indexing_statuses", []):
-        if entry.get("name") in names and "cc_pair_id" in entry:
+        name = entry.get("name") or ""
+        if "cc_pair_id" in entry and any(name == n or name.startswith(n + " ") for n in names):
             print(entry["cc_pair_id"], entry["name"], sep="\t")
 ' "${TMPDIR}/status.out" "${TEST_CONNECTOR_NAMES[@]}"
 }
