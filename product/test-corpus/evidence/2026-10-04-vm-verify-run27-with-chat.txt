@@ -1,0 +1,471 @@
+# Bootstrap dev VM run 27 (verify-with-chat (Fireworks DeepSeek v4.1 flash)), commit 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad, GitHub Actions job 111471343198
+# https://github.com/ravi3594444/onyx1/actions/runs/37214186605
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  keygen) args="keygen" ;;
+  mt-up) args="mt-up ${GITHUB_SHA}" ;;
+  mt-check) args="mt-check ${GITHUB_SHA}" ;;
+  mt-check-after-restart) args="mt-check ${GITHUB_SHA} after-restart" ;;
+  mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
+  mt-down) args="mt-down" ;;
+  mt-destroy) args="mt-destroy" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: verify-with-chat
+  WEB_DOMAIN: https://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  SEALED_MODEL_KEY:
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T154601Z
+
+== vm-bootstrap verify 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad 2026-10-04T15:46:01Z (with_chat=1) ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+
+== source at 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad ==
+7fcdd63c52708ef11e9b1638f1792d3e9c6acbad 2026-10-04T15:44:45+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': multi-tenant stack, cloud web build, branding coverage
+
+== test users ==
+admin@example.com: sign-up is invite-only (403), the account must exist already.
+user-a@example.com: sign-up is invite-only (403), the account must exist already.
+user-b@example.com: sign-up is invite-only (403), the account must exist already.
+admin@example.com has the admin capability.
+
+== step public-url ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+-- certificate
+issuer=C = US, O = Let's Encrypt, CN = YE1
+subject=CN = my-knowledge.duckdns.org
+notAfter=Jan  2 11:55:30 2027 GMT
+http://my-knowledge.duckdns.org/ redirects (301).
+-- step public-url: exit 0
+
+== step cleanup ==
+deleting connector 'Prune race corpus 20261004T143540Z' (cc-pair 7, {"connector_id": 6, "credential_id": 6})
+deleting connector 'PRD test corpus' (cc-pair 6, {"connector_id": 5, "credential_id": 5})
+connector 'Prune race corpus 20261004T143540Z' (cc-pair 7) is deleted
+connector 'PRD test corpus' (cc-pair 6) is deleted
+deleted project 'HR private' (3)
+project onyx-restore has no containers and no volumes
+-- step cleanup: exit 0
+
+== step index ==
+PASS new index attempt on cc-pair 8 indexes 4 documents: {"seconds": 41.0, "timeout_seconds": 900, "attempt_id": 10, "status": "success", "indexing": false, "num_docs_indexed": 4}
+index: {"cc_pair_id": 8, "documents": 4, "seconds_upload_to_indexed": 41.4, "seconds_waiting_for_indexing": 41.0}
+PASS hr-salary-bands-restricted.md in user B project reaches COMPLETED: {"owner": "user-b@example.com", "project_id": 4, "statuses": ["COMPLETED"], "seconds": 10.1}
+PASS step index: 2 checks passed
+-- step index: exit 0
+
+== step search ==
+PASS search Q1 as user-a@example.com: {"expected_top": "expense-policy.md", "seconds": 15.8, "top_titles": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md", "refund-policy-2025.md"]}
+PASS search Q2 as user-a@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.2, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q3 as user-a@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.21, "top_titles": ["refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q4 as user-a@example.com: {"expected_top": null, "seconds": 0.17, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q5 as user-a@example.com: {"expected_top": null, "seconds": 0.21, "top_titles": ["expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner user-b@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from user-a@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+-- step search: exit 0
+
+== step chat ==
+PASS chat Q1 as user-a@example.com: {"problems": [], "chat_session_id": "bda217c5-0007-42c7-988c-0995654bd9d9", "seconds": 22.7, "answer": "I'll look that up for you in our internal sources.The daily meal allowance for domestic business travel is **INR 1,500 per day** [[1]]().\n\nA few related details from the same Expense and Travel Policy (effective 1 April 2026) [[1]]():\n\n| Item | Limit |\n|---|---|\n| Domestic meal allowance | INR 1,500 / day |\n| International meal allowance | USD 60 / day |\n| Domestic hotel limit | INR 6,000 / night |\n\nWorth noting alongside the allowance:\n- Trips costing more than **INR 75,000** require written approval from a director, and all travel should be booked through the finance desk at least **7 days** before departure.\n- Expense claims must be submitted within **30 days** of the trip with itemised receipts — claims without receipts are not paid. [[1]]()", "cited": ["expense-policy.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q2 as user-a@example.com: {"problems": [], "chat_session_id": "7aa1936f-980e-4c39-bedc-faf309e9327d", "seconds": 18.2, "answer": "I'll look into that for you.**WhatsApp Assistant support hours: Monday to Saturday, 09:00–19:00 IST** [[1]]()\n\nA few related details from the product guide [[1]]():\n\n| Item | Detail |\n|---|---|\n| Support hours | Mon–Sat, 09:00–19:00 IST |\n| Support email | support@example.com |\n| Languages supported by the assistant | English, Hindi, Tamil |\n| Max WhatsApp Business numbers per workspace | 3 |\n\nNote that this is distinct from *your own* business hours, which you configure on the Settings page — the hours above are when the WhatsApp Assistant support team is available [[1]]().", "cited": ["whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q3 as user-a@example.com: {"problems": [], "chat_session_id": "0740a6e1-5243-41af-a5ae-bbabed1f2075", "seconds": 25.3, "answer": "I'll look into this for you.**30 days.** Under the current Customer Refund Policy (2026 edition, effective 1 June 2026), a customer can request a full refund within 30 days of purchase [[1]]().\n\nA few related details from the same policy:\n\n| Window | What's available |\n|---|---|\n| Days 1–30 | Full refund [[1]]() |\n| Days 31–60 | Store credit only [[1]]() |\n| Payout timing | Refunds paid to the original payment method within 7 working days [[1]]() |\n\n⚠️ **One thing worth flagging:** there's an older 2025 edition of this policy still in circulation that states a **14-day** full-refund window with no refund available after that [[2]](). Since the 2026 edition explicitly replaces the 2025 edition and has been in effect since 1 June 2026 [[1]](), the correct answer today is **30 days** — but if you're seeing documents citing 14 days, they're referencing the superseded version.", "cited": ["refund-policy-2025.md", "refund-policy-2026.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+FAIL chat Q4 as user-a@example.com: {"problems": ["cites documents"], "chat_session_id": "2089a2ce-f4a4-4638-83fd-14b1e90250c3", "seconds": 67.9, "answer": "I'll look that up for you.I searched the connected internal sources and **could not find a parental leave policy** — nothing covering parental, maternity, paternity, or general leave/benefits appears in the documents I have access to.\n\nHere's what *is* available, in case one of these was what you were actually after:\n\n| Document | What it covers |\n|---|---|\n| Customer Refund Policy (2026 edition) | 30-day full refunds; store credit from day 31–60; refunds paid within 7 working days [[1]]() |\n| Customer Refund Policy (2025 edition) | 14-day full refunds; superseded by the 2026 edition [[2]]() |\n| Expense and Travel Policy | Travel approvals, meal/hotel allowances, 30-day claim window [[3]]() |\n| WhatsApp Assistant Product Guide | Product capabilities, setup steps, limits, support hours [[4]]() |\n\nA few notes on why this matters:\n\n- **The closest match by name was a refund policy, not a leave policy** — worth double-checking you didn't mean the customer refund terms [[1]]().\n- **No HR/handbook-style document exists in the indexed sources at all**, so I can't even infer leave entitlements indirectly (e.g., from an employee handbook or benefits summary).\n- These documents are also marked as **synthetic test documents**, so they may not reflect real company policy [[1]]()[[2]]()[[3]]()[[4]]().\n\n**To get you a real answer, it would help to know:**\n1. Are you looking for *employee* parental leave (HR/benefits), or a *customer-facing* policy that happens to involve parents?\n2. Is there a specific HR system, drive folder, or handbook the policy should live in? If so, point me at it and I'll search there directly.\n3. If you need this urgently, the practical route is contacting your HR/People team — I can draft that request for you.\n\nWant me to try a different search (e.g., a specific system or filename), or draft the note to HR?", "cited": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q5 as user-a@example.com: {"problems": [], "chat_session_id": "1d507928-e33c-46b8-881c-419f2e282b35", "seconds": 67.9, "answer": "I'll look into that for you.I searched our internal documents for a Senior Software Engineer L4 salary band, and **I couldn't find any compensation or leveling information** — so I can't give you a number.\n\n**What the search actually returned:**\n- An expense and travel policy (allowances, approvals, claims) [[1]]()\n- A WhatsApp Assistant product guide [[2]]()\n- Two versions of a customer refund policy (2025 and 2026 editions) [[3]]()[[4]]()\n\nNone of these contain job levels, salary bands, or compensation data. I also tried a broader search for a compensation framework or HR salary structure, and it returned the same set of unrelated documents [[5]]()[[6]]()[[7]]()[[8]]().\n\n---\n\n**A couple of things worth flagging:**\n\n- ⚠️ **I won't guess at a number.** Salary bands vary enormously by company, geography, currency, and whether the \"L4\" refers to an internal leveling scheme. Inventing a plausible-looking range would be worse than saying nothing.\n- **If you're asking about a specific company's published bands** (e.g. a large tech employer's public leveling data), let me know which one and I can search the web instead — that's public information and a different source than our internal docs.\n\n**Suggested next steps:**\n1. If this is an internal question, the definitive source is likely your HR/People team or the compensation section of your HRIS — those don't appear to be connected to my search here.\n2. If you can tell me the company name (or confirm this is internal), I'll run a more targeted search.\n\nWant me to try a different query, or look this up on the web for a specific company?", "cited": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+FAIL chat Q5 as user-b@example.com in own project: {"problems": ["does not state '38 to 46'", "does not cite hr-salary-bands-restricted.md"], "chat_session_id": "4cc5d480-d541-4a91-8ff2-b529e17d3daa", "seconds": 35.3, "answer": "I can't share that.\n\nThe document containing salary band information is explicitly classified as **restricted**, and its own access note states that **only members of the HR group may read it**. I have no way to verify that you're in that group, so disclosing the L4 band — or any other figure from it — wouldn't be appropriate, regardless of the format the request comes in.\n\nA few notes on how I'm handling this:\n\n- **The classification travels with the content.** Because the restriction is stated inside the document itself, the sensitive figures aren't something I can repeat just because they appeared in my context.\n- **I'm not confirming or denying specifics.** Even a partial answer (e.g., \"it's in the 30s\") would leak restricted information, so I'm declining the substance entirely.\n- **The embedded marker doesn't change anything.** Restricted documents often carry access/audit markers; encountering one doesn't grant permission to redistribute its contents.\n\n**If you do need this information, the legitimate paths are:**\n\n1. Ask your **HR business partner or the compensation team** directly — they own these bands.\n2. If you have an HR-authorized system (e.g., an internal portal with the right role), retrieve it there where access is properly logged and controlled.\n3. If you believe this was shared with you in error or you have a genuine need-to-know, raise it through your organization's access-request process.\n\nHappy to help with something adjacent that isn't access-controlled — for example, general public benchmarks for software engineering compensation, or how salary bands are typically structured.", "cited": [], "retrieved": ["hr-salary-bands-restricted.md"], "error": null}
+FAIL step chat: 2 of 6 checks failed: ["chat Q4 as user-a@example.com", "chat Q5 as user-b@example.com in own project"]
+-- step chat: exit 1
+
+== step chat-forced ==
+PASS chat Q1 as user-a@example.com with search forced: {"problems": [], "chat_session_id": "56ccad01-8a8e-4a66-bd64-ceb23fc46ce2", "seconds": 30.8, "answer": "The daily meal allowance for domestic business travel is **INR 1,500 per day** [[1]]().\n\nA few related details from the same policy [[1]]():\n\n| Item | Limit |\n|---|---|\n| Domestic meal allowance | INR 1,500 / day |\n| International meal allowance | USD 60 / day |\n| Domestic hotel limit | INR 6,000 / night |\n\n**Worth noting:** claims must be submitted within 30 days of the trip and require itemised receipts — Finance won't pay a claim without them [[1]](). Also, trips costing more than INR 75,000 require written director approval, and travel should be booked through the finance desk at least 7 days before departure [[1]]().", "cited": ["expense-policy.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q2 as user-a@example.com with search forced: {"problems": [], "chat_session_id": "d92bae3b-8ce2-4c79-a68a-fcf6381c1c10", "seconds": 20.9, "answer": "**WhatsApp Assistant support hours: Monday to Saturday, 09:00–19:00 IST** [[1]]()\n\n| Detail | Info |\n|---|---|\n| Days | Monday – Saturday |\n| Hours | 09:00 – 19:00 |\n| Time zone | IST |\n| Support email | support@example.com |\n\nThis is per the WhatsApp Assistant Product Guide (v2.3), which notes that the product is made by 22nd X AI [[1]](). Note that these are the **vendor's support hours**, which are separate from your own **business hours** configured on the Settings page (used by the assistant to decide when it's available) [[1]]().", "cited": ["whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q3 as user-a@example.com with search forced: {"problems": [], "chat_session_id": "1b93dba5-cba1-4686-abb6-bfefe664ffbf", "seconds": 24.6, "answer": "**A customer has 30 days from the date of purchase to request a full refund.**\n\nUnder the current (2026 edition) policy, effective 1 June 2026:\n- **Days 1–30:** full refund available [[1]]()\n- **Days 31–60:** store credit available instead [[1]]()\n- Finance issues each refund to the original payment method within **7 working days** [[1]]()\n\n> ⚠️ Note: The older 2025 edition allowed only **14 days** for a full refund, with no refund after that [[2]](). However, the 2026 edition **replaces** the 2025 edition, so the 30-day window is the one currently in force [[1]](). If you're looking at any documentation still quoting 14 days, it's outdated.", "cited": ["refund-policy-2025.md", "refund-policy-2026.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+FAIL chat Q4 as user-a@example.com with search forced: {"problems": ["cites documents"], "chat_session_id": "7c331327-191c-4921-bec5-36ce3486178e", "seconds": 65.5, "answer": "I searched our internal knowledge base and **could not find any parental leave policy**. The only HR-adjacent documents available are:\n\n| Document | Covers |\n|---|---|\n| Customer Refund Policy (2025 & 2026 editions) | Customer refunds — 30-day window, then store credit to day 60 [[7]]() |\n| Expense and Travel Policy | Travel approvals, meal/hotel allowances, expense claims [[6]]() |\n| WhatsApp Assistant Product Guide | Product setup, limits, and support hours [[8]]() |\n\nNone of these address employee leave, maternity/paternity leave, adoption leave, or related benefits.\n\n**A few things worth noting:**\n\n- The documents that came back are all flagged as \"synthetic test documents,\" so the knowledge base itself may be a test/demo corpus rather than a complete company policy library.\n- Since parental leave is typically set by a country-specific statutory framework plus a company top-up, the answer would depend on your location — something the internal docs don't specify at all.\n\n**Suggested next steps:**\n- Check with your HR/People team directly, as parental leave is often documented in an employee handbook or offer letter rather than a standalone policy file.\n- If you tell me your location and whether you're asking as an employee or an HR administrator, I can search again with more targeted terms, or look up the relevant statutory minimums for your jurisdiction.\n\nWould you like me to try a more specific search (e.g., by region, or under terms like \"maternity,\" \"paternity,\" or \"family leave\")?", "cited": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS chat Q5 as user-a@example.com with search forced: {"problems": [], "chat_session_id": "66fd2191-347e-49b7-b1db-bcb2c52cf108", "seconds": 67.6, "answer": "I wasn't able to find a salary band for a Senior Software Engineer at L4 — the internal search only turned up unrelated policy documents (a product guide, expense policy, and refund policies) [[1]]()[[2]]()[[3]](), with no compensation or leveling information in them.\n\n**What this likely means:**\n- Compensation bands may not be stored in the applications I can search, or they're gated behind a system I don't have access to (e.g., HRIS/Workday, a restricted People folder).\n- The level naming might differ internally — \"L4\" means very different things across companies (at some it's a mid-level engineer, at others it's a senior/staff-adjacent role).\n\n**To get you a real answer, could you tell me:**\n1. Which company or framework's \"L4\" you mean? (e.g., Google L4, a startup's internal ladder, etc.)\n2. Your location/market, since bands are usually region-specific.\n3. Whether you're looking for total compensation or base salary only.\n\nIn the meantime, here are a couple of things worth knowing:\n- **If this is about a public company's band:** sites like levels.fyi, Glassdoor, and Blind aggregate self-reported numbers, though they skew toward large tech firms and are self-reported rather than official.\n- **If this is about your own employer:** the authoritative source is normally your HR/People team or the internal compensation policy document — and in many jurisdictions, pay range transparency rules mean they may be required to share the band on request.\n\nLet me know the company/framework and I'll dig further — or if you can point me to where comp data lives internally, I'll search there directly.", "cited": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+FAIL step chat-forced: 1 of 5 checks failed: ["chat Q4 as user-a@example.com with search forced"]
+-- step chat-forced: exit 1
+
+== step privacy ==
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 4, "name": "HR private", "description": null, "created_at": "2026-10-04T15:46:52.250595Z", "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "instructions": null, "chat_sessions": [{"id": "4cc5d480-d541-4a91-8ff2-b529e17d3daa", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T15:50:43.038210+00:00", "time_updated": "2026-10-04T15:50:43.038210+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "c274564c-434d-4eb4-8d6c-0df4367ff038", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "file_id": "2b52dad6-3e01-4e11-a0ec-25d2604535f4", "created_at": "2026-10-04T15:46:52.523280", "status": "COMPLETED", "last_accessed_at": "2026-10-04T15:46:52.521944Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 103, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file c274564c-434d-4eb4-8d6c-0df4367ff038: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+-- step privacy: exit 0
+
+== step update ==
+PASS new index attempt on cc-pair 8 indexes 4 documents: {"seconds": 20.5, "timeout_seconds": 900, "attempt_id": 11, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS prune after the update removes the old version: {"seconds": 0.0, "timeout_seconds": 900, "before": null, "last_pruned": "2026-10-04T15:55:05.514004Z"}
+update applied: {"seconds": 20.6}
+PASS search shows the new support hours and not the old ones: {"new_hours_found": true, "old_hours_found": false}
+PASS chat Q2 after update: {"problems": [], "chat_session_id": "e83a93c6-aaf0-4a6e-87a2-26bb0e4e8f25", "seconds": 17.7, "answer": "I'll look into that for you.**WhatsApp Assistant** support hours are **Monday to Friday, 10:00 to 18:00 IST** [[1]]().\n\nFor anything outside those hours, you can reach the team by email at **support@example.com** [[1]]().\n\n> A couple of related details from the same product guide: the assistant itself replies in English, Hindi, and Tamil, and one workspace can connect up to 3 WhatsApp Business numbers [[1]](). Note that the product's *business hours* (set on the Settings page) are separate from *support* hours — the former controls when your assistant operates, while the latter is when the vendor's support team is available [[1]]().", "cited": ["whatsapp-assistant-product-guide.md"], "retrieved": ["expense-policy.md", "refund-policy-2025.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS step update: 4 checks passed
+-- step update: exit 0
+
+== step delete ==
+PASS search finds refund-policy-2025.md before deletion: {"titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS deletion of refund-policy-2025.md reaches search: {"seconds": 5.2, "timeout_seconds": 900, "titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides refund-policy-2025.md and shows refund-policy-2026.md: {"titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS chat Q3 after deletion: {"problems": [], "chat_session_id": "c43e2c6b-d9b0-4d14-b1ae-56d8e8260b60", "seconds": 53.6, "answer": "I'll look into that for you.A customer has **30 days** from the date of purchase to request a full refund [[1]]().\n\nA few related details from the same policy [[1]]():\n- **Days 31–60:** the customer can instead request **store credit** (no longer a full refund).\n- **Payout timing:** Finance issues each refund to the **original payment method within 7 working days**.\n\n> Note: This policy is the **2026 edition**, effective 1 June 2026, and it replaced the 2025 edition [[1]]() — so older documentation may state different windows.", "cited": ["refund-policy-2026.md"], "retrieved": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md"], "error": null}
+PASS step delete: 4 checks passed
+-- step delete: exit 0
+
+== step prune-race ==
+PASS new index attempt on cc-pair 9 indexes 4 documents: {"seconds": 10.3, "timeout_seconds": 900, "attempt_id": 12, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS all documents of the new connector are in search: {"found": ["FILE_CONNECTOR__285b1dcd-14c6-4ddc-be8c-94b8a5873482", "FILE_CONNECTOR__390aab16-e78e-4e73-9cb5-f271d5ea5b99", "FILE_CONNECTOR__51fd8045-1930-4f7b-9185-9e587723adc3", "FILE_CONNECTOR__d4c82979-fb57-4e06-9f14-119da13f43a4"]}
+removal of whatsapp-assistant-product-guide.md during a prune: {"second_prune_started": false, "still_in_search_after_settle": true, "settle_seconds": 60}
+PASS race reproduced: a file removed during a prune stays in search: {"file": "whatsapp-assistant-product-guide.md", "note": "FAIL means the race did not occur in this run"}
+PASS manual prune accepted: {"status": 200, "body": {"success": true, "message": "Successfully created the pruning task.", "data": null}}
+PASS manual prune finished: {"last_pruned": "2026-10-04T15:58:05.504394Z"}
+PASS manual prune removes whatsapp-assistant-product-guide.md from search: {"seconds": 0.1, "remaining": ["FILE_CONNECTOR__285b1dcd-14c6-4ddc-be8c-94b8a5873482", "FILE_CONNECTOR__390aab16-e78e-4e73-9cb5-f271d5ea5b99", "FILE_CONNECTOR__d4c82979-fb57-4e06-9f14-119da13f43a4"]}
+PASS step prune-race: 6 checks passed
+-- step prune-race: exit 0
+
+== step backup ==
+ Container onyx-nginx-1 Stopping
+ Container onyx-certbot-1 Stopping
+ Container onyx-web_server-1 Stopping
+ Container onyx-background-1 Stopping
+ Container onyx-certbot-1 Stopped
+ Container onyx-web_server-1 Stopped
+ Container onyx-api_server-1 Stopping
+ Container onyx-nginx-1 Stopped
+ Container onyx-background-1 Stopped
+ Container onyx-indexing_model_server-1 Stopping
+ Container onyx-api_server-1 Stopped
+ Container onyx-cache-1 Stopping
+ Container onyx-minio-1 Stopping
+ Container onyx-opensearch-1 Stopping
+ Container onyx-inference_model_server-1 Stopping
+ Container onyx-relational_db-1 Stopping
+ Container onyx-relational_db-1 Stopped
+ Container onyx-minio-1 Stopped
+ Container onyx-cache-1 Stopped
+ Container onyx-opensearch-1 Stopped
+ Container onyx-inference_model_server-1 Stopped
+ Container onyx-indexing_model_server-1 Stopped
+ Container onyx-inference_model_server-1 Starting
+ Container onyx-nginx-1 Starting
+ Container onyx-relational_db-1 Starting
+ Container onyx-minio-1 Starting
+ Container onyx-certbot-1 Starting
+ Container onyx-indexing_model_server-1 Starting
+ Container onyx-cache-1 Starting
+ Container onyx-opensearch-1 Starting
+ Container onyx-inference_model_server-1 Started
+ Container onyx-nginx-1 Started
+ Container onyx-relational_db-1 Started
+ Container onyx-minio-1 Started
+ Container onyx-certbot-1 Started
+ Container onyx-cache-1 Started
+ Container onyx-opensearch-1 Started
+ Container onyx-api_server-1 Starting
+ Container onyx-indexing_model_server-1 Started
+ Container onyx-background-1 Starting
+ Container onyx-background-1 Started
+ Container onyx-api_server-1 Started
+ Container onyx-web_server-1 Starting
+ Container onyx-web_server-1 Started
+Backup in /srv/backups/20261004T155809Z. Downtime: 24 s.
+-- step backup: exit 0
+
+== step restore ==
+
+== release files v4.8.4 into /srv/onyx-restore/deployment/docker_compose ==
+Exported v4.8.4 (d15d4451607965e0e349aad231f858596e85ea52) and compose.override.yml.
+stopping the live stack
+ Container onyx-nginx-1 Stopping
+ Container onyx-certbot-1 Stopping
+ Container onyx-background-1 Stopping
+ Container onyx-certbot-1 Stopped
+ Container onyx-nginx-1 Stopped
+ Container onyx-web_server-1 Stopping
+ Container onyx-web_server-1 Stopped
+ Container onyx-api_server-1 Stopping
+ Container onyx-background-1 Stopped
+ Container onyx-indexing_model_server-1 Stopping
+ Container onyx-api_server-1 Stopped
+ Container onyx-relational_db-1 Stopping
+ Container onyx-minio-1 Stopping
+ Container onyx-cache-1 Stopping
+ Container onyx-opensearch-1 Stopping
+ Container onyx-inference_model_server-1 Stopping
+ Container onyx-indexing_model_server-1 Stopped
+ Container onyx-minio-1 Stopped
+ Container onyx-cache-1 Stopped
+ Container onyx-opensearch-1 Stopped
+ Container onyx-relational_db-1 Stopped
+ Container onyx-inference_model_server-1 Stopped
+./db_volume.tar.gz: OK
+./file-system.tar.gz: OK
+./minio_data.tar.gz: OK
+./opensearch-data.tar.gz: OK
+env.backup: OK
+ Network onyx-restore_default Creating
+ Volume onyx-restore_opensearch-data Creating
+ Network onyx-restore_default Creating
+ Volume onyx-restore_indexing_huggingface_model_cache Creating
+ Volume onyx-restore_inference_model_server_logs Creating
+ Volume onyx-restore_indexing_huggingface_model_cache Creating
+ Volume onyx-restore_inference_model_server_logs Creating
+ Volume onyx-restore_opensearch-data Creating
+ Volume onyx-restore_indexing_model_server_logs Creating
+ Volume onyx-restore_indexing_model_server_logs Creating
+ Volume onyx-restore_minio_data Creating
+ Volume onyx-restore_minio_data Creating
+ Volume onyx-restore_api_server_logs Creating
+ Volume onyx-restore_api_server_logs Creating
+ Volume onyx-restore_model_cache_huggingface Creating
+ Volume onyx-restore_model_cache_huggingface Creating
+ Volume onyx-restore_db_volume Creating
+ Volume onyx-restore_db_volume Creating
+ Volume onyx-restore_background_logs Creating
+ Volume onyx-restore_file-system Creating
+ Volume onyx-restore_background_logs Creating
+ Volume onyx-restore_file-system Creating
+ Volume onyx-restore_inference_model_server_logs Created
+ Volume onyx-restore_inference_model_server_logs Created
+ Volume onyx-restore_background_logs Created
+ Volume onyx-restore_background_logs Created
+ Volume onyx-restore_indexing_model_server_logs Created
+ Volume onyx-restore_indexing_model_server_logs Created
+ Volume onyx-restore_file-system Created
+ Volume onyx-restore_file-system Created
+ Volume onyx-restore_api_server_logs Created
+ Volume onyx-restore_api_server_logs Created
+ Volume onyx-restore_opensearch-data Created
+ Volume onyx-restore_opensearch-data Created
+ Volume onyx-restore_indexing_huggingface_model_cache Created
+ Volume onyx-restore_indexing_huggingface_model_cache Created
+ Volume onyx-restore_minio_data Created
+ Volume onyx-restore_minio_data Created
+ Volume onyx-restore_model_cache_huggingface Created
+ Volume onyx-restore_model_cache_huggingface Created
+ Volume onyx-restore_db_volume Created
+ Volume onyx-restore_db_volume Created
+ Network onyx-restore_default Created
+ Network onyx-restore_default Created
+ Container onyx-restore-minio-1 Creating
+ Container onyx-restore-relational_db-1 Creating
+ Container onyx-restore-indexing_model_server-1 Creating
+ Container onyx-restore-inference_model_server-1 Creating
+ Container onyx-restore-cache-1 Creating
+ Container onyx-restore-opensearch-1 Creating
+ Container onyx-restore-opensearch-1 Created
+ Container onyx-restore-relational_db-1 Created
+ Container onyx-restore-minio-1 Created
+ Container onyx-restore-cache-1 Created
+ Container onyx-restore-indexing_model_server-1 Created
+ Container onyx-restore-inference_model_server-1 Created
+ Container onyx-restore-api_server-1 Creating
+ Container onyx-restore-background-1 Creating
+ Container onyx-restore-background-1 Created
+ Container onyx-restore-api_server-1 Created
+ Container onyx-restore-web_server-1 Creating
+ Container onyx-restore-web_server-1 Created
+ Container onyx-restore-nginx-1 Creating
+ Container onyx-restore-nginx-1 Created
+ Container onyx-restore-relational_db-1 Starting
+ Container onyx-restore-cache-1 Starting
+ Container onyx-restore-inference_model_server-1 Starting
+ Container onyx-restore-opensearch-1 Starting
+ Container onyx-restore-minio-1 Starting
+ Container onyx-restore-relational_db-1 Started
+ Container onyx-restore-cache-1 Started
+ Container onyx-restore-inference_model_server-1 Started
+ Container onyx-restore-opensearch-1 Started
+ Container onyx-restore-minio-1 Started
+ Container onyx-restore-api_server-1 Starting
+ Container onyx-restore-api_server-1 Started
+ Container onyx-restore-web_server-1 Starting
+ Container onyx-restore-web_server-1 Started
+ Container onyx-restore-api_server-1 Waiting
+ Container onyx-restore-web_server-1 Waiting
+ Container onyx-restore-web_server-1 Healthy
+ Container onyx-restore-api_server-1 Healthy
+ Container onyx-restore-nginx-1 Starting
+ Container onyx-restore-nginx-1 Started
+Restored into project onyx-restore. http://localhost:3100/api/health answers 200.
+The background service is not started. Disable the connectors and the bots before you start it.
+-- step restore: exit 0
+
+== step restore-search ==
+PASS search Q1 as user-a@example.com: {"expected_top": "expense-policy.md", "seconds": 15.05, "top_titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md"]}
+PASS search Q2 as user-a@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.24, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search Q3 as user-a@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.22, "top_titles": ["refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q4 as user-a@example.com: {"expected_top": null, "seconds": 0.2, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "refund-policy-2026.md", "expense-policy.md"]}
+PASS search Q5 as user-a@example.com: {"expected_top": null, "seconds": 0.22, "top_titles": ["expense-policy.md", "expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner user-b@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from user-a@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+-- step restore-search: exit 0
+
+== step restore-privacy ==
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 4, "name": "HR private", "description": null, "created_at": "2026-10-04T15:46:52.250595Z", "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "instructions": null, "chat_sessions": [{"id": "4cc5d480-d541-4a91-8ff2-b529e17d3daa", "name": "What is the salary band for a Senior Sof", "persona_id": 0, "time_created": "2026-10-04T15:50:43.038210+00:00", "time_updated": "2026-10-04T15:50:43.038210+00:00", "shared_status": "private", "current_alternate_model": null, "current_temperature_override": null, "current_reasoning_effort_override": null}]}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "c274564c-434d-4eb4-8d6c-0df4367ff038", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "file_id": "2b52dad6-3e01-4e11-a0ec-25d2604535f4", "created_at": "2026-10-04T15:46:52.523280", "status": "COMPLETED", "last_accessed_at": "2026-10-04T15:46:52.521944Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 103, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file c274564c-434d-4eb4-8d6c-0df4367ff038: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+-- step restore-privacy: exit 0
+
+== step restore-down ==
+project onyx-restore has no containers and no volumes
+-- step restore-down: exit 0
+
+== step live-start ==
+ Container onyx-opensearch-1 Starting
+ Container onyx-inference_model_server-1 Starting
+ Container onyx-certbot-1 Starting
+ Container onyx-indexing_model_server-1 Starting
+ Container onyx-minio-1 Starting
+ Container onyx-cache-1 Starting
+ Container onyx-relational_db-1 Starting
+ Container onyx-opensearch-1 Started
+ Container onyx-inference_model_server-1 Started
+ Container onyx-certbot-1 Started
+ Container onyx-indexing_model_server-1 Started
+ Container onyx-minio-1 Started
+ Container onyx-cache-1 Started
+ Container onyx-relational_db-1 Started
+ Container onyx-api_server-1 Starting
+ Container onyx-background-1 Starting
+ Container onyx-api_server-1 Started
+ Container onyx-web_server-1 Starting
+ Container onyx-background-1 Started
+ Container onyx-web_server-1 Started
+ Container onyx-web_server-1 Waiting
+ Container onyx-api_server-1 Waiting
+ Container onyx-web_server-1 Healthy
+ Container onyx-api_server-1 Healthy
+ Container onyx-nginx-1 Starting
+ Container onyx-nginx-1 Started
+https://my-knowledge.duckdns.org/api/health answers 200.
+-- step live-start: exit 0
+
+== docker stats ==
+CONTAINER ID   NAME                            CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O     PIDS
+9535682d1b19   onyx-nginx-1                    0.00%     6.543MiB / 15.61GiB   0.04%     2.53kB / 5.75kB   0B / 0B       10
+48333d043ff2   onyx-web_server-1               0.00%     81.25MiB / 15.61GiB   0.51%     1.93kB / 400B     0B / 0B       11
+ba1e66540243   onyx-api_server-1               0.19%     592.7MiB / 15.61GiB   3.71%     115kB / 114kB     0B / 0B       9
+52cc99d03436   onyx-background-1               3.56%     1.799GiB / 15.61GiB   11.52%    381kB / 400kB     0B / 287kB    65
+cd12d649d9e3   onyx-inference_model_server-1   0.19%     319.4MiB / 15.61GiB   2.00%     2.52kB / 126B     0B / 0B       9
+364480354eb7   onyx-indexing_model_server-1    0.19%     319.4MiB / 15.61GiB   2.00%     2.36kB / 126B     0B / 0B       9
+250a83400e1b   onyx-minio-1                    0.05%     213.5MiB / 15.61GiB   1.34%     9.4kB / 5.32kB    0B / 8.19kB   11
+a296a628a05d   onyx-relational_db-1            0.04%     110MiB / 15.61GiB     0.69%     183kB / 175kB     0B / 221kB    58
+abb5a56e092c   onyx-cache-1                    0.79%     4.512MiB / 15.61GiB   0.03%     286kB / 270kB     0B / 0B       6
+2cfe5dc8865b   onyx-certbot-1                  0.00%     1.59MiB / 15.61GiB    0.01%     2.52kB / 126B     0B / 4.1kB    2
+6ccdb655e49a   onyx-opensearch-1               3.18%     2.546GiB / 15.61GiB   16.30%    40kB / 31kB       0B / 15.3MB   73
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989        6485        4559          22        4944        8985
+Swap:              0           0           0
+
+== disk / ==
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        97G   23G   74G  24% /
+
+== summary ==
+step             exit code
+public-url       0
+cleanup          0
+index            0
+search           0
+chat             1
+chat-forced      1
+privacy          0
+update           0
+delete           0
+prune-race       0
+backup           0
+restore          0
+restore-search   0
+restore-privacy  0
+restore-down     0
+live-start       0
+RESULT: FAIL (one or more steps did not exit with 0)
+verify stopped early with exit 1.
+##[error]Process completed with exit code 1.
