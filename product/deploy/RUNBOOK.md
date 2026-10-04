@@ -161,3 +161,23 @@ Compare the output with `product/test-corpus/README.md`.
 | Test corpus and checks | `product/test-corpus/` | PRD functional checks | Sandbox run |
 
 There are no changes to upstream source files.
+
+## 11. CI and deployment pipeline
+
+Review result (4 October 2026):
+
+- The fork has 50 workflows from upstream. GitHub Actions is not enabled on the fork, so none
+  of them runs (0 registered workflows, 0 runs).
+- Many of them need Onyx's private secrets (Docker Hub, AWS, Slack, Sentry) or self-hosted
+  `runs-on` runners. Some publish images and releases.
+- We added no workflow. Our files are checked locally by the repository's pre-commit hooks
+  (`ruff`, `shellcheck`, `ripsecrets`, large-file check):
+
+  ```bash
+  uvx pre-commit run --files $(git ls-files docs/product product)
+  ```
+
+Before you enable Actions, disable the upstream workflows you do not want
+(`gh workflow disable <name>`), because enabling Actions activates all of them.
+Add a deployment workflow only when the VM, its secrets and the license exist. It must deploy
+the pinned digests in `release.env`, keep the volumes, and check `/api/health` after the deploy.

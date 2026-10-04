@@ -152,3 +152,62 @@ Missing branding should not prevent baseline inspection/testing. Missing a deplo
 - Baseline resource measurements and scaling recommendations supported by them.
 - Restore/recovery procedure and its observed limitations.
 - Remaining inputs or verified feature gaps.
+
+## Baseline evidence (sandbox run, 3–4 October 2026)
+
+This section records the first run. The procedure is in `product/deploy/RUNBOOK.md`.
+
+### Environment
+
+- Target: Claude Code cloud sandbox, 4 vCPU, 15.7 GB RAM, about 40 GB disk allowance.
+  The owner's development VM was not supplied. These numbers show feasibility only.
+- Release: upstream `v4.8.4` (`d15d445`), images pinned by digest.
+- Containers had no internet access. The model server images contain the embedding model,
+  so indexing worked offline.
+- No model credentials were supplied. A local stand-in model (Qwen3-4B, Q4_K_M, llama.cpp,
+  CPU only) served as an OpenAI-compatible provider. Its answer quality and speed do not
+  represent a production provider.
+- Sandbox-only adjustments, not for the VM: lower OpenSearch ulimits (host limits),
+  absolute OpenSearch disk watermarks (the VM reports a 252 GB disk with a small allowance).
+
+### Results
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Installation | Pass | `make-env.sh` and `docker compose up -d`: 10 services healthy in about 2 minutes |
+| Authentication | Pass | Register 201, login 204, wrong password 400. Basic user gets 403 on admin APIs. Anonymous gets 403. |
+| Search and answer | Partial | Search ranks the expected document first for Q1–Q3. Chat with the stand-in model: Q1 correct with citation; Q2 and Q3 answered without calling Search, also with Search forced. Retest with the production model. |
+| Missing information | Pass with note | Q5 for a user without access: "no information", no leak. Q4: the stand-in model did not search and gave a generic reply without a company policy. |
+| Citations | Pass | Q1 cites `expense-policy.md`. Bob's Q5 cites `hr-salary-bands-restricted.md`. Citations are stored with the chat. |
+| Source update | Pass | File replaced through `/files/update`: re-indexed in 28 s; search shows the new hours only. |
+| Source deletion | Pass | File removed: gone from search in 6 s. |
+| Privacy | Pass (Community scope) | Alice gets 403 on Bob's chat. Bob's project file never appears in Alice's or the admin's search. |
+| Group-restricted document | Blocked | User groups need the Business plan (HTTP 402). |
+| Branding | Blocked | Enterprise settings need the Business plan (HTTP 402). Assets and script are ready. |
+| Restart | Pass | Host restart: all containers returned. `down` and `up`: healthy in 98 s; documents, files, chats, citations and settings intact. Redis restart signs users out. |
+| Restore | Pass | Cold backup (81 s downtime, 7.5 MB). Restore into a separate project on port 3100: healthy in 87 s. Search, old chats, privacy and new cited answers work. |
+| Desktop and phone | Pass | Login, chat, admin connector pages render at 1280×800 and 390×844. |
+
+### Resources
+
+| Measure | Value |
+| --- | --- |
+| Onyx RAM, all services, no LLM | Peak 8.9 GiB, median 6.3 GiB |
+| Largest services | OpenSearch 2.7 GiB (2 GB heap), background workers 2.4 GiB, model servers 1.3 + 1.1 GiB |
+| Onyx CPU | Median 10 % of one vCPU; 4 vCPU saturated during indexing and model warm-up |
+| Local stand-in LLM | Up to 5.2 GiB RAM and all 4 vCPU |
+| Disk | Images about 19.5 GB; model caches 1.1 GB; data for this corpus under 70 MB |
+| Ingestion | 4 files: 107 s on the first run (includes warm-up); 1 changed file: 28 s |
+| Search latency | 0.35–0.53 s warm; 49 s for the first query after a restart |
+| Chat latency | 11–280 s with the CPU stand-in model; not representative |
+
+Recommendations from these numbers: 16 GB RAM is enough for this corpus with a hosted model
+provider. Do not run a local LLM on the same 4 vCPU VM. Keep at least 30 GB free for images
+and growth. Measure again with the real corpus before changing the VM size.
+
+### Remaining inputs
+
+1. A Business license (trial or development) for branding and user groups.
+2. Model provider credentials.
+3. The development VM, and the domain for the app.
+4. Decision on brand colours: these need our own web image (see `product/branding/README.md`).
