@@ -1,0 +1,151 @@
+# Bootstrap dev VM run 32 (mt-check (Company A and B isolation)), commit 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad, GitHub Actions job 111474625204
+# https://github.com/ravi3594444/onyx1/actions/runs/37215352669
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  keygen) args="keygen" ;;
+  mt-up) args="mt-up ${GITHUB_SHA}" ;;
+  mt-check) args="mt-check ${GITHUB_SHA}" ;;
+  mt-check-after-restart) args="mt-check ${GITHUB_SHA} after-restart" ;;
+  mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
+  mt-down) args="mt-down" ;;
+  mt-destroy) args="mt-destroy" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: mt-check
+  WEB_DOMAIN: http://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  SEALED_MODEL_KEY:
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T160351Z-mt-check
+
+== vm-bootstrap mt-check 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad 2026-10-04T16:03:51Z (mode=first) ==
+http://127.0.0.1:3200/api/health answers 200.
+
+== source at 7fcdd63c52708ef11e9b1638f1792d3e9c6acbad ==
+7fcdd63c52708ef11e9b1638f1792d3e9c6acbad 2026-10-04T15:44:45+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': multi-tenant stack, cloud web build, branding coverage
+Created /srv/onyx-mt/mt-tag.
+Created /srv/onyx-mt/mt-salt (mode 600, value not shown).
+Tag: mt-775b7965
+PASS owner A registers uninvited: {"email": "owner-a-mt-775b7965@example.com", "status": 201, "body": {"id": "5b40f4f1-76b8-4087-8901-974a5863d161", "email": "owner-a-mt-775b7965@example.com", "is_active": true, "is_superuser": false, "is_verified": false, "account_type": "STANDARD"}}
+PASS owner A /api/me shows a workspace and admin capability: {"email": "owner-a-mt-775b7965@example.com", "team_name": "tenant_586958a3-344c-4901-a81c-cd225e6eab95", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS owner B registers uninvited: {"email": "owner-b-mt-775b7965@example.com", "status": 201, "body": {"id": "5fff986c-f8b5-4f5d-8542-2a1b61aa660e", "email": "owner-b-mt-775b7965@example.com", "is_active": true, "is_superuser": false, "is_verified": false, "account_type": "STANDARD"}}
+PASS owner B /api/me shows a workspace and admin capability: {"email": "owner-b-mt-775b7965@example.com", "team_name": "tenant_a5cdf564-b044-43a3-9235-bafc3b99d5f5", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS owners A and B are in different workspaces: {"owner-a": "tenant_586958a3-344c-4901-a81c-cd225e6eab95", "owner-b": "tenant_a5cdf564-b044-43a3-9235-bafc3b99d5f5"}
+PASS owner A invites member A: {"status": 200, "body": {"invited_count": 1, "email_invite_status": "DISABLED"}}
+email_invite_status: "DISABLED"
+PASS owner A invited list shows member A: {"status": 200, "invited": ["member-a-mt-775b7965@example.com"]}
+PASS member A registers after invite: {"email": "member-a-mt-775b7965@example.com", "status": 201, "body": {"id": "32e30067-3560-4b16-b592-63e023c42c88", "email": "member-a-mt-775b7965@example.com", "is_active": true, "is_superuser": false, "is_verified": false, "account_type": "STANDARD"}}
+PASS owner B invite request succeeds: {"status": 200, "body": {"invited_count": 1, "email_invite_status": "DISABLED"}}
+PASS owner B invite lands in workspace B and not in A: {"status_b": 200, "status_a": 200, "in_b": true, "in_a": false}
+connector MT connector A mt-775b7965: {"name": "MT connector A mt-775b7965", "connector_id": 1, "cc_pair_id": 2}
+PASS new index attempt on cc-pair 2 indexes 1 documents: {"seconds": 107.2, "timeout_seconds": 900, "attempt_id": 1, "status": "success", "indexing": false, "num_docs_indexed": 1}
+connector MT connector B mt-775b7965: {"name": "MT connector B mt-775b7965", "connector_id": 1, "cc_pair_id": 2}
+PASS new index attempt on cc-pair 2 indexes 1 documents: {"seconds": 122.1, "timeout_seconds": 900, "attempt_id": 1, "status": "success", "indexing": false, "num_docs_indexed": 1}
+persona: {"id": 1, "name": "MT persona A mt-775b7965", "is_public": true}
+PASS owner A user file reaches COMPLETED: {"statuses": ["COMPLETED"], "seconds": 5.1}
+PASS owner A keeps workspace and admin capability: {"email": "owner-a-mt-775b7965@example.com", "team_name": "tenant_586958a3-344c-4901-a81c-cd225e6eab95", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS owner B keeps workspace and admin capability: {"email": "owner-b-mt-775b7965@example.com", "team_name": "tenant_a5cdf564-b044-43a3-9235-bafc3b99d5f5", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS member A is in workspace A without admin capability: {"email": "member-a-mt-775b7965@example.com", "team_name": "tenant_586958a3-344c-4901-a81c-cd225e6eab95", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["basic", "generate:image", "read:chat", "read:search", "use:llm_gateway", "write:chat"]}
+PASS member A gets 403 on /api/manage/users/accepted?page_num=0&page_size=1000: {"status": 403, "body": {"error_code": "INSUFFICIENT_PERMISSIONS", "detail": "You do not have the required permissions for this action."}}
+PASS owner A user list shows owner A and member A and not owner B: {"status": 200, "emails": ["owner-a-mt-775b7965@example.com", "member-a-mt-775b7965@example.com"]}
+PASS owner B user list shows owner B and not owner A or member A: {"status": 200, "emails": ["owner-b-mt-775b7965@example.com"]}
+PASS owner A search finds expense-policy.md: {"titles": ["expense-policy.md", "expense-policy.md"]}
+PASS owner A search does not find refund-policy-2026.md: {"titles": ["expense-policy.md", "expense-policy.md"]}
+PASS member A search finds expense-policy.md: {"titles": ["expense-policy.md"]}
+PASS member A search does not find refund-policy-2026.md: {"titles": ["expense-policy.md"]}
+PASS owner B search finds refund-policy-2026.md: {"titles": ["refund-policy-2026.md"]}
+PASS owner B search does not find expense-policy.md: {"titles": ["refund-policy-2026.md"]}
+PASS owner A reads own chat session: {"status": 200}
+PASS owner B cannot read owner A chat session: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "Chat session not found"}}
+PASS member A cannot read owner A chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS owner A connector list shows own connector and not B's: {"status": 200, "names": ["MT connector A mt-775b7965"]}
+PASS owner B connector list shows own connector and not A's: {"status": 200, "names": ["MT connector B mt-775b7965"]}
+PASS owner A persona list shows own persona: {"status": 200, "names": ["Assistant", "MT persona A mt-775b7965"]}
+PASS owner B persona list lacks owner A persona: {"status": 200, "names": ["Assistant"]}
+PASS owner B cannot read owner A persona by id: {"status": 404, "name": null}
+PASS member A sees owner A persona only when it is public: {"status": 200, "is_public": true, "visible": true}
+PASS owner A reads own user file: {"status": 200}
+PASS owner B cannot read owner A user file: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "File not found"}}
+PASS owner B file status lookup hides owner A user file: {"status": 200, "body": []}
+PASS member A cannot read owner A user file: {"status": 404, "body": {"error_code": "NOT_FOUND", "detail": "File not found"}}
+PASS member A file status lookup hides owner A user file: {"status": 200, "body": []}
+PASS owner B project list lacks owner A project: {"status": 200, "names": [], "project_id_a": 1}
+PASS owner A PAT gives owner A /api/me and workspace: {"status": 200, "email": "owner-a-mt-775b7965@example.com", "team_name": "tenant_586958a3-344c-4901-a81c-cd225e6eab95", "tenant_info": {"invitation": null, "new_tenant": null}, "admin_capabilities": ["add:agents", "admin", "basic", "craft_sandbox", "create:user_api_keys", "generate:image", "manage:actions", "manage:agents", "manage:bots", "manage:connectors", "manage:document_sets", "manage:llms", "manage:service_account_api_keys", "manage:skills", "manage:user_groups", "read:admin", "read:agent_analytics", "read:agents", "read:chat", "read:connectors", "read:document_sets", "read:query_history", "read:search", "read:user_groups", "read:users", "use:llm_gateway", "write:chat"]}
+PASS owner A PAT search finds expense-policy.md and not refund-policy-2026.md: {"status": 200, "status_b": 200, "own_titles": ["expense-policy.md", "expense-policy.md"], "other_titles": ["expense-policy.md", "expense-policy.md"]}
+PAT deleted: {"status": 200}
+PASS step mt: 42 checks passed

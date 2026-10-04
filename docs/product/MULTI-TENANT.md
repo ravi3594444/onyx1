@@ -142,3 +142,25 @@ Step 4. Cleanup (after 14 days without rollback). Remove `onyx_*` volumes only a
 
 Open risks: MT mode is upstream "development only" on Compose. `DEV_MODE` has side effects
 listed above. Re-test this document after each Onyx upgrade.
+
+## 5. Results on the VM (4 October 2026, isolated stack)
+
+The `mt-up` and `mt-check` actions of `axi-bootstrap-dev.yml` run the stack of section 3 on the
+development VM next to the live single-tenant install. Evidence:
+`product/test-corpus/evidence/2026-10-04-vm-mt-up-run31.txt` and `...-vm-mt-check-run32.txt`.
+
+| Acceptance item | Result |
+|---|---|
+| Register Company A and Company B without an invitation | PASS. Each sign-up returns 201, `/api/me` shows a distinct `tenant_<uuid>` team and the `admin` capability. |
+| Invite a member into A | PASS. `PUT /api/manage/admin/users` records the invitation (`email_invite_status: DISABLED`, no SMTP). The member registers, lands in A, has basic capabilities only and gets 403 on the user list. |
+| B's invitations stay in B | PASS. The invited address appears in B's list and not in A's. |
+| Documents and search | PASS. A's connector document is found by A's owner and member and not by B; B's document is found by B only. |
+| Chats | PASS. B gets 404 on A's chat session; A's member gets 403 on the owner's session. |
+| Connectors, agents, files, projects | PASS. Each owner lists only their own connector and persona; B gets 404 on A's persona and user file; project lists do not cross. The member sees A's persona only when it is public. |
+| APIs | PASS. A personal API key of A's owner resolves to A and searches only A's documents. |
+| Repeat after restart | See the `mt-check-after-restart` row in `TRD-PLAN.md`. |
+
+Not covered by these runs: email delivery (no SMTP), the invite accept and deny modal of the
+cloud web build (the stack ran the single-tenant branded image), billing pages, and the
+control-plane calls listed in `MULTI-TENANT-DEPENDENCIES.md`.
+
