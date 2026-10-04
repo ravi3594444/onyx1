@@ -1451,7 +1451,27 @@ saas_backfill() {
   local -a args=()
   [[ "${1:-}" != dry-run ]] || args=(--dry-run)
   section "platform defaults for every tenant (onyx.axi.backfill ${args[*]})"
+  saas_key_presence
   saas_compose exec -T api_server python -m onyx.axi.backfill "${args[@]}"
+}
+
+# Says where the platform key is present: the saas .env, the resolved compose config and
+# the running containers. Prints present or missing only, never a value.
+saas_key_presence() {
+  local env_file="${SAAS_COMPOSE_DIR}/.env" service state
+  if grep -qE '^FIREWORKS_DEFAULT_API_KEY=.+' "${env_file}"; then state=present; else state=missing; fi
+  echo "platform key in ${env_file}: ${state}"
+  for service in api_server background; do
+    state="$(saas_compose config --format json 2>/dev/null | python3 -c '
+import json, sys
+env = json.load(sys.stdin)["services"][sys.argv[1]].get("environment") or {}
+print("present" if env.get("FIREWORKS_DEFAULT_API_KEY") else "missing")
+' "${service}" || echo unknown)"
+    echo "platform key in the compose config of ${service}: ${state}"
+    # shellcheck disable=SC2016
+    state="$(saas_compose exec -T "${service}" sh -c '[ -n "${FIREWORKS_DEFAULT_API_KEY:-}" ] && echo present || echo missing' 2>/dev/null || echo unknown)"
+    echo "platform key in the running ${service} container: ${state}"
+  done
 }
 
 # The volumes of both projects. The live volumes (onyx_*) must always be in the list.
