@@ -3,6 +3,8 @@ name: Bootstrap dev VM
 # inspect: read-only report. install: Docker, host settings, release files, stack start.
 # verify: functional checks, backup, isolated restore. restart: down and up, then search
 # and privacy checks. https, https-staging: Let's Encrypt for my-knowledge.duckdns.org.
+# owner: admin access, invitation, invite-only sign-up. model: hosted LLM provider.
+# smtp: mail settings. The model and smtp actions read environment secrets.
 # See product/deploy/RUNBOOK.md.
 
 on:
@@ -21,6 +23,9 @@ on:
           - restart
           - https
           - https-staging
+          - owner
+          - model
+          - smtp
       web_domain:
         description: Public URL of the stack (install only, for a new .env)
         type: string
@@ -29,6 +34,27 @@ on:
         description: Email for the Let's Encrypt account (https and https-staging only)
         type: string
         default: ""
+      owner_email:
+        description: Workspace owner to grant admin access (owner only)
+        type: string
+        default: ravi80847949@gmail.com
+      invite_email:
+        description: One member to invite (owner only, optional)
+        type: string
+        default: ""
+      invite_only:
+        description: Invite-only sign-up (owner only)
+        type: choice
+        default: keep
+        options: [keep, "on", "off"]
+      model_provider:
+        description: LiteLLM provider name (model only)
+        type: string
+        default: fireworks_ai
+      model_name:
+        description: Model id, or list to show the provider's matching models (model only)
+        type: string
+        default: list
 
 permissions:
   contents: read
@@ -56,6 +82,11 @@ jobs:
       BOOTSTRAP_ACTION: ${{ inputs.action }}
       WEB_DOMAIN: ${{ inputs.web_domain }}
       LETSENCRYPT_EMAIL: ${{ inputs.letsencrypt_email }}
+      OWNER_EMAIL: ${{ inputs.owner_email }}
+      INVITE_EMAIL: ${{ inputs.invite_email }}
+      INVITE_ONLY: ${{ inputs.invite_only }}
+      MODEL_PROVIDER: ${{ inputs.model_provider }}
+      MODEL_NAME: ${{ inputs.model_name }}
     steps:
       - name: Check the deploy secrets
         env:
@@ -74,6 +105,66 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Send the secrets file to the VM
+        if: inputs.action == 'model' || inputs.action == 'smtp'
+        env:
+          DEV_SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
+          DEV_SSH_USER: ${{ secrets.DEV_SSH_USER }}
+          DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+          DEV_SSH_KNOWN_HOSTS: ${{ secrets.DEV_SSH_KNOWN_HOSTS }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          MODEL_API_BASE: ${{ secrets.MODEL_API_BASE }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_STARTTLS: ${{ secrets.SMTP_STARTTLS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        run: |
+          set -euo pipefail
+          # %q writes bash quoting, because vm-bootstrap.sh sources the file. The values never
+          # reach the command line or the log.
+          case "${BOOTSTRAP_ACTION}" in
+            model)
+              if [[ -z "${MODEL_API_KEY}" ]]; then
+                echo "::error::Add the secret MODEL_API_KEY to the environment ci-protected."
+                exit 1
+              fi
+              name=model.env
+              content="$(printf 'MODEL_API_KEY=%q
+MODEL_API_BASE=%q
+' "${MODEL_API_KEY}" "${MODEL_API_BASE}")"
+              ;;
+            smtp)
+              if [[ -z "${SMTP_SERVER}" || -z "${EMAIL_FROM}" ]]; then
+                echo "::error::Add the secrets SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASS and EMAIL_FROM to ci-protected."
+                exit 1
+              fi
+              name=smtp.env
+              content="$(printf 'SMTP_SERVER=%q
+SMTP_PORT=%q
+SMTP_USER=%q
+SMTP_PASS=%q
+SMTP_STARTTLS=%q
+EMAIL_FROM=%q
+'                 "${SMTP_SERVER}" "${SMTP_PORT}" "${SMTP_USER}" "${SMTP_PASS}" "${SMTP_STARTTLS}" "${EMAIL_FROM}")"
+              ;;
+          esac
+          ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+          trap 'rm -rf "${ssh_dir}"' EXIT
+          chmod 700 "${ssh_dir}"
+          umask 077
+          printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+          printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+          printf '%s\n' "${content}" | ssh -F /dev/null -i "${ssh_dir}/key" \
+            -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o PreferredAuthentications=publickey \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+            -o ConnectTimeout=30 \
+            -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+            "umask 077 && mkdir -p /srv/onyx/secrets && cat >/srv/onyx/secrets/${name}"
+          echo "Wrote /srv/onyx/secrets/${name} on the VM."
       - name: Run vm-bootstrap.sh over SSH
         env:
           DEV_SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
@@ -97,6 +188,23 @@ jobs:
               args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
               [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
               ;;
+            owner)
+              email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+              if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+                echo "::error::owner_email is not a plain email address."; exit 1
+              fi
+              if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+                echo "::error::invite_email is not a plain email address."; exit 1
+              fi
+              args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+              ;;
+            model)
+              if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+                echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+              fi
+              args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+              ;;
+            smtp) args="smtp ${GITHUB_SHA}" ;;
             *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
           esac
           if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
