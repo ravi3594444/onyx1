@@ -73,6 +73,62 @@ To keep a log, add `2>&1 | tee checks.log` after the closing parenthesis, and ru
 
 If a step fails, the loop does not run the later steps. For example, if the owner check fails, the loop stops at `search`. To get the evidence of the later steps, run each one separately with the same command.
 
+## Customer-journey test (multi-tenant stack)
+
+`saas_journey.py` tests the multi-tenant production stack (project `onyx-saas`) like customers
+use it. It imports the helpers and the expected answers of `run_checks.py` and `mt_checks.py`.
+It never configures an LLM provider, a default model or the default assistant: the platform
+backend image must supply them to each new company. It writes no `/api/admin/llm/*` setting
+and never calls `PATCH /api/admin/default-assistant`.
+
+```bash
+MT_PASSWORD_SALT=... python3 product/test-corpus/saas_journey.py \
+  --base-url https://my-knowledge.duckdns.org --tag journey-1a2b3c4d \
+  --state journey_state.json [--email-domain example.com] [--after-restart]
+```
+
+`vm-bootstrap.sh saas-journey <sha> [after-restart]` runs it on the VM (workflow actions
+`saas-journey` and `saas-journey-after-restart`). The output and the exit code follow the rules of
+"Pass and fail" above. The first run does these steps:
+
+1. Owner A and owner B sign up with `POST /api/auth/register` and the body of the web form
+   (`email`, `username`, `password`). Each one is admin of a different workspace (`/api/me`
+   `team_name`).
+2. Without setup, `GET /api/llm/provider` (the listing of the chat UI) shows the default model
+   "22nd X AI model" to each owner. `GET /api/admin/default-assistant/configuration` (read only)
+   holds `ASSISTANT_ADDITION` of `product/deploy/default_assistant.py`. Owner A gets an answer to
+   "Reply with the single word OK" before any document exists.
+3. As owner A, the admin provider listing masks `api_key`. A `PUT /api/admin/llm/provider` with
+   `api_key_changed: false` and a foreign API base must get 4xx with the guard message, and the
+   provider must stay unchanged. `POST /api/admin/llm/test` with the stored key and a foreign API
+   base must also get the guard message. The foreign base is `https://api.example.invalid/v1`: a
+   reserved name, so no request leaves the server also when the guard fails.
+4. Owner A indexes the four public files in `documents/` (the unchanged files, never the updated
+   copies of the update check) and puts `hr-salary-bands-restricted.md` into a private project.
+   Owner B indexes only `refund-policy-2026.md`.
+5. Owner A invites member A. Member A signs up, lands in workspace A without admin access and gets
+   403 on the user list and on the admin LLM endpoints. Owner A's user list shows member A; owner
+   B's does not.
+6. Member A asks Q1 to Q5 with the expected answers of the table above (as user A of
+   `run_checks.py`). Owner A asks Q5 in the private project (as user B of `run_checks.py`).
+7. Separation: owner B's chat answer to Q1 cites nothing, retrieves no company A document and says
+   that the documents lack the information. Owner B's search for Q1 returns no company A document.
+   Owner A's search returns no document id of company B (both companies have a file with the name
+   `refund-policy-2026.md`, so the check compares document ids). Owner B and member A cannot read
+   owner A's chat session; owner B cannot read owner A's user file. Connector and assistant lists
+   do not cross.
+
+`--after-restart` logs in with the stored accounts and repeats: identities and roles, the platform
+model, the masked key, the 403 of member A, the chat session separation, a new "OK" chat, member
+A's Q1 answer with its citation, the search separation and owner B's Q1 answer.
+
+`MODEL_API_KEY` (optional) is the platform key. The script never sends it and refuses a request
+body that holds it. It checks that no response body of the whole run holds the key. Without it,
+the run prints `SKIP the platform key appears in no response` and relies on the masked
+`api_key` field. The log never shows an `api_key` value: the v4.8.4 mask keeps 8 characters.
+
+The state file keeps the tag, the emails, the workspaces and the ids for `--after-restart`.
+
 ## UI evidence
 
 `ui_evidence.mjs` takes browser screenshots of a deployed instance. It runs in

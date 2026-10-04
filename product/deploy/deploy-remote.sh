@@ -6,6 +6,8 @@
 # The HEAD of /srv/onyx-src is the commit whose files are in /srv/onyx.
 # ALLOW_ROLLBACK=1 permits an older commit. ALLOW_RELEASE_CHANGE=1 permits a new Onyx release.
 # The script never creates .env and never removes containers or volumes.
+# After the cutover, project onyx-saas owns ports 80 and 443 and project onyx stays stopped.
+# Then the script changes nothing and exits with 0. vm-bootstrap.sh saas-update deploys.
 set -euo pipefail
 
 # Bash reads the whole function before it runs it, so no command reads the piped script.
@@ -19,6 +21,15 @@ main() {
   local log="${deploy_dir}/deploy.log"
 
   [[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || die "Give the full 40-character commit SHA."
+  # "docker compose up -d" below would start project onyx next to onyx-saas.
+  local saas_running
+  saas_running="$(docker ps -q --filter label=com.docker.compose.project=onyx-saas)" ||
+    die "docker ps failed. Nothing was deployed."
+  if [[ -n "${saas_running}" ]]; then
+    echo "::notice::Project onyx-saas serves the public URL. This deploy changed nothing on the VM and did not start project onyx. To deploy ${sha} on onyx-saas, run axi-bootstrap-dev.yml with action saas-update."
+    echo "$(date -u +%FT%TZ) Skipped ${sha}: project onyx-saas runs (use saas-update)." >>"${log}" || true
+    exit 0
+  fi
   [[ -f "${env_file}" ]] ||
     die "${env_file} is missing. Run product/deploy/make-env.sh once (RUNBOOK.md, section 3)."
 

@@ -172,31 +172,136 @@ Let's Encrypt files). The live single-tenant project `onyx` keeps its folder `/s
 its volumes `onyx_*`. Nothing deletes them. Run the steps with the workflow
 `axi-bootstrap-dev.yml` (input `action`). Each step keeps a log in `/srv/onyx/evidence/`.
 
+Preconditions of `cutover`:
+
+- `release.env` has a value in `ONYX_BACKEND_IMAGE_CLOUD`: the digest of the image that
+  `axi-build-backend.yml` builds (v4.8.4 with `product/deploy/backend-patch`). While the value
+  is empty, `cutover` and `saas-update` stop before they change anything.
+- `/srv/onyx/secrets/model.env` holds `MODEL_API_KEY` and `MODEL_NAME` (the `model` action
+  writes both). `MODEL_PROVIDER` defaults to `fireworks_ai`. `MODEL_API_BASE` is optional.
+- The owner account (input `owner_email`) exists and is active in the live stack.
+
 | Order | Action | What it does |
 | --- | --- | --- |
-| 1 | `inventory` | Read-only. Counts users, connectors, documents, chats, files, assistants, LLM providers and groups of the live stack. The log shows counts only. The emails and connector names go to `inventory.txt` (mode 600) in the evidence folder. Ends with the list of what needs recreation. |
-| 2 | `cutover` (needs `letsencrypt_email`) | Refuses when `onyx-saas` runs or the live stack is not healthy. Cold backup of the live stack into `/srv/backups/<time>-pre-cutover` with checksum check. Prepares `/srv/onyx-saas` with a new `.env` and the cloud web image, copies the certificate and the nginx redirect files, pulls the images. Then stops `onyx` (volumes stay), starts `onyx-saas`, waits for `https://my-knowledge.duckdns.org/api/health` and checks the redirect. On a failed start it stops `onyx-saas` and starts `onyx` again by itself. |
-| 3 | `saas-check` | Runs `mt_checks.py` against the public URL: two test companies, one invited member, documents, chats, separation. With `/srv/onyx/secrets/model.env` the company checks also configure the model. |
-| 4 | `saas-restart` | `down` without `-v`, `up -d`, health, redirect, volume comparison, then `saas-check-after-restart`. |
+| 1 | `inventory` (uses `owner_email`) | Read-only. Counts users, connectors, documents, chats, files, assistants, LLM providers and groups of the live stack. Shows the accounts by category (see below) with their chat sessions and user files, whether the owner is present and admin, and the account transfer plan (a dry run). The log shows counts only. The emails and connector names go to `inventory.txt` (mode 600) in the evidence folder. |
+| 2 | `cutover` (needs `letsencrypt_email` and `owner_email`) | See "Cutover steps" below. |
+| 3 | `saas-journey` | The customer-journey test of section 7 against the public URL. |
+| 4 | `saas-restart` | `down` without `-v`, `up -d`, health, redirect, volume comparison, then `saas-journey-after-restart`. |
+| - | `saas-check` | Runs `mt_checks.py` (two test companies, separation checks). It configures no model. |
+| - | `saas-defaults`, `saas-defaults-dry-run` | Runs `python -m onyx.axi.backfill [--dry-run]` in `api_server`. It gives every tenant, also the pre-built pool tenants, the platform defaults that it lacks, and prints one outcome for each tenant. It never overwrites a company setting. |
+| - | `saas-update` | Deploys a commit on `onyx-saas`: release files and overlays, pinned images, platform model from `model.env`. `.env` keeps its secrets. Then `pull`, `up -d`, health, redirect check and the backfill. |
 | - | `rollback` | Stops `onyx-saas` (volumes stay) and starts `onyx` again. The old service is back in about 2 minutes. Refuses nothing except a missing live `.env`. |
 | - | `saas-down` | Stops `onyx-saas`. The public URL answers nothing until `cutover` or `rollback`. There is no destroy action for this stack. |
+
+Account categories of `inventory` (from the live `user` table):
+
+- owner: the address of `owner_email`. Admin comes from the permission `admin` in
+  `effective_permissions` (membership of the Admin group). The column `role` is a tombstone
+  in v4.8.4. Without `effective_permissions` the inventory shows `unknown`.
+- synthetic: addresses that end in `@example.com` (test accounts).
+- service: API keys, bots and placeholders: `account_type` is not `STANDARD`, or the address
+  ends in `onyxapikey.ai` (`onyx/db/api_key.py`), or it is `anonymous@onyx.app` or
+  `no-auth-placeholder@onyx.app`.
+- other: all other accounts (other real accounts). The log shows their count only.
+
+### Cutover steps
+
+1. Checks: `onyx-saas` does not run, the live stack is healthy, the certificate exists,
+   `ONYX_BACKEND_IMAGE_CLOUD` is set, `model.env` exists, and the transfer plan can run.
+   Nothing is changed when a check fails.
+2. Cold backup of the live stack into `/srv/backups/<time>-pre-cutover`, with checksum check.
+3. Prepares `/srv/onyx-saas`: a new `.env` (never a copy of the live one), the cloud web and
+   backend images, and `FIREWORKS_DEFAULT_API_KEY`, `FIREWORKS_DEFAULT_MODEL`,
+   `FIREWORKS_DEFAULT_PROVIDER` and `FIREWORKS_DEFAULT_API_BASE` from `model.env`. The log shows
+   the key names only. Copies the certificate and the nginx files, pulls the images.
+4. Reads the rows of the owner and of each active other real account (email, password hash,
+   `is_verified`, admin) from the live database into `/srv/onyx-saas/account-transfer.json`
+   (mode 600). The hashes go through a pipe only; the log never shows them.
+5. Stops `onyx` (volumes stay), starts `onyx-saas`, waits for
+   `https://my-knowledge.duckdns.org/api/health` and checks the redirect.
+6. Account transfer (`transfer_accounts` in `vm-bootstrap.sh`, `product/deploy/transfer_accounts.py`):
+   - Signs up the owner with `POST /api/auth/register` and a random one-time password. This is
+     the native sign-up: a new company, the owner is its admin, the platform defaults apply.
+   - Logs in as the owner, invites each other real account (`PUT /api/manage/admin/users`) and
+     signs up each one with its own random one-time password. They join the owner's company
+     as members. Former admins get admin access (`PATCH /api/manage/admin/users/admin-access`).
+   - Reads the tenant schema of the owner from `public.user_tenant_mapping`. Copies each old
+     password hash into `"<schema>"."user"` in one transaction:
+     `transfer_accounts.py copy-sql | docker compose exec -T relational_db psql -f - | transfer_accounts.py verify`.
+     The values reach psql as `\set` lines of the script on stdin, never on a command line.
+   - Reads the hashes back and prints only `owner: transferred, password unchanged, admin` and
+     counts. The one-time passwords are discarded. Each account logs in with its old password.
+   - Passwords are never reset. `@example.com` and service accounts are not transferred.
+     Inactive accounts are not transferred.
+7. `python -m onyx.axi.backfill` gives every tenant, also the pool tenants, the platform defaults.
+
+When a step after the stop fails, the cutover fails. The EXIT trap stops `onyx-saas` and starts
+`onyx` again, and the log says so. Accounts that the transfer created stay in the `onyx-saas_*`
+volumes. The next `cutover` does not sign them up again, but copies the hashes again. If the
+owner already has a company in `onyx-saas`, the transfer cannot invite new accounts (the owner
+password is unknown to the script); the log shows their count, and the owner invites them.
+
+Limits of the transfer:
+
+- The sign-up limit of the stack is 5 sign-ups per hour from one address. The transfer resets
+  the counter and needs 1 + N sign-ups. For more than 4 other real accounts, the plan stops the
+  cutover. Then add `SIGNUP_RATE_LIMIT_ENABLED=false` to `/srv/onyx/secrets/saas.env`.
+- In `MULTI_TENANT` mode, v4.8.4 refuses `+` in the local part of a new address. The plan stops
+  the cutover when an account has such an address.
 
 The backup folder holds `db_volume.tar.gz`, `opensearch-data.tar.gz`, `minio_data.tar.gz`,
 `file-system.tar.gz`, `env.backup` (the live `.env`, with secrets) and `SHA256SUMS`. Copy it off
 the VM. `product/deploy/restore.sh` restores it into a fresh folder.
 
-Not migrated (section 2, option A): accounts and passwords, connectors and their documents,
-chats, uploaded files, the LLM provider and the settings. Every user signs up again. The first
-sign-up of an email creates its company and makes that user admin. Members join by invitation
-only. The old data stays in the `onyx_*` volumes and in the backup.
+### What is not migrated
 
-Test accounts of `saas-check`: `owner-a-<tag>@example.com`, `owner-b-<tag>@example.com`,
-`member-a-<tag>@example.com` and `invitee-b-<tag>@example.com`. The tag is `saas-` plus 8 hex
-characters, stored in `/srv/onyx-saas/saas-tag` (the log shows it). The passwords derive from
-the salt in `/srv/onyx-saas/saas-salt` (mode 600, never printed). These accounts are two
-throwaway companies; they hold only the test documents.
+Only accounts move. Chats, documents, connectors, uploaded files, projects, assistants and
+settings of the old workspace stay in the `onyx_*` volumes and in the backup. They are not
+migrated. `rollback` makes them reachable again. After the cutover, the owner sees an empty
+company with the platform model "22nd X AI model" and the knowledge rules of the default
+assistant, and adds documents again.
 
-Rollback window: `rollback` returns the previous service with all its data. Companies created
-on `onyx-saas` after the cutover stay in the `onyx-saas_*` volumes and come back with the next
-`cutover`. Remove the `onyx_*` volumes only after a final backup and a decision to stay.
+### Deploys after the cutover
 
+`axi-deploy-dev.yml` runs `deploy-remote.sh` on every push to `main`. That script starts
+project `onyx` with `docker compose up -d`. When `onyx-saas` has running containers, the script
+changes nothing, prints a notice and exits with 0: ports 80 and 443 belong to `onyx-saas`.
+Run `saas-update` to deploy a commit on `onyx-saas`.
+
+### Rollback
+
+`rollback` returns the previous service with all its data. Companies created on `onyx-saas`
+after the cutover stay in the `onyx-saas_*` volumes and come back with the next `cutover`.
+Remove the `onyx_*` volumes only after a final backup and a decision to stay.
+
+### Known limits
+
+- Leave team: nginx answers every `POST /api/tenants/leave-team` with 409
+  (`LEAVE_TEAM_GUARD`, `product/deploy/nginx/render-redirect.sh`). In v4.8.4 the last admin who
+  leaves asks the control plane to delete the team, and this deployment has none. The guard is
+  a temporary limitation, not a complete implementation: no user can leave a team. An admin
+  removes the account instead.
+- Email: invitations, verification and password reset need SMTP (the `smtp` action). Without
+  SMTP, the invite list records the address (`email_invite_status: DISABLED`), and the invited
+  person signs up with that address.
+
+## 7. Customer-journey test (`saas-journey`)
+
+`product/test-corpus/saas_journey.py` acts like customers do. It never configures an LLM
+provider, a default model or the default assistant. Details: `product/test-corpus/README.md`.
+
+| Step | Checks |
+| --- | --- |
+| Sign-up | Owner A and owner B sign up with the request of the web form. Each one is admin of a different company. |
+| Platform model | Without setup, `GET /api/llm/provider` (the listing of the chat UI) shows the default "22nd X AI model" to each owner. The default assistant holds the knowledge rules. Owner A gets an answer to "Reply with the single word OK" before any document exists. |
+| Platform key | The admin provider listing masks the key. A change of the API base with the stored key is refused (4xx with the guard message), and the provider stays unchanged. A test call with the stored key and a foreign API base is refused. Member A gets 403 on the admin LLM endpoints. With `MODEL_API_KEY` set, no response body of the whole run holds the key. |
+| Knowledge | Owner A indexes the four public corpus files and puts the restricted file into a private project. Company B indexes only `refund-policy-2026.md`. |
+| Invitation | Owner A invites member A. Member A lands in company A without admin access and gets 403 on the user list. Owner A's user list shows member A; owner B's does not. |
+| Answers | Member A gets Q1 to Q5 with the assertions of `run_checks.py`. Owner A gets Q5 in the private project. |
+| Separation | Owner B's chat on Q1 says that its documents lack the information, without citations. Search results, chat sessions, user files, connectors and assistants do not cross. |
+
+The test accounts are `owner-a-<tag>`, `owner-b-<tag>` and `member-a-<tag>` at `example.com`. Each
+first run makes a new tag (`journey-` plus 8 hex characters, in `/srv/onyx-saas/journey-tag`), so
+it creates two new test companies on the production stack. The passwords derive from the salt
+in `/srv/onyx-saas/journey-salt` (mode 600, never printed). `saas-journey-after-restart` and
+`saas-restart` reuse the tag of the last first run.

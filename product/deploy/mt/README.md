@@ -77,6 +77,8 @@ Additions from the migration research (line numbers refer to `backend/` at v4.8.
 | `VERIFY_CREATE_OPENSEARCH_INDEX_ON_INIT_MT=true` | `api_server`, `background` | The code default, set explicitly: a tenant's OpenSearch index is created when it is first used (`onyx/configs/app_configs.py:565`). Vespa setup is skipped by the default `ONYX_DISABLE_VESPA=true` (`onyx/setup.py:366`). |
 | `mt_minio_bucket` (one-shot service) | new | With `MULTI_TENANT=true` the API server does not create the file store bucket (`onyx/main.py:428-431`). The `MINIO_DEFAULT_BUCKETS` setting of the upstream `minio` service is not reliable (see its comment). The job runs `mc mb --ignore-existing` for `S3_FILE_STORE_BUCKET_NAME` (default `onyx-file-store-bucket`), and `api_server` waits until it completes. `mt-up` shows its log. |
 | `HUBSPOT_TRACKING_URL` | not set | No tracking calls (`ee/onyx/configs/app_configs.py:166`). `mt-up` stops if `.env` sets it. |
+| `FIREWORKS_DEFAULT_*` | `api_server`, `background` | Platform model of every new company. Only the cloud backend image (`ONYX_BACKEND_IMAGE_CLOUD`, production stack) reads them. `saas_prepare` copies them from `secrets/model.env` into the saas `.env`. The TEST stack leaves them empty. |
+| `SIGNUP_RATE_LIMIT_ENABLED` | `api_server` | `true` unless `.env` sets `false`: 5 sign-ups per hour from one address. |
 
 `.env` checks in `mt-up` (no value is printed):
 
@@ -134,7 +136,8 @@ the VM. Stop the stack with `mt-down` when the validation ends.
 
 The TEST stack uses `ONYX_WEB_SERVER_IMAGE` from `product/deploy/release.env` (our GHCR build).
 The PRODUCTION stack uses `ONYX_WEB_SERVER_IMAGE_CLOUD` from the same file: the build with
-`NEXT_PUBLIC_CLOUD_ENABLED=true`.
+`NEXT_PUBLIC_CLOUD_ENABLED=true`. It also uses `ONYX_BACKEND_IMAGE_CLOUD` (the backend with the
+platform defaults); `cutover` and `saas-update` stop while that value is empty.
 
 In v4.8.4, `web/src/lib/constants.ts` reads `NEXT_PUBLIC_CLOUD_ENABLED` for
 `NEXT_PUBLIC_CLOUD_ENABLED` and `SERVER_SIDE_ONLY__CLOUD_ENABLED`. `web/Dockerfile` takes it as

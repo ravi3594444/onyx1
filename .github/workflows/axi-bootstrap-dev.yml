@@ -8,7 +8,9 @@ name: Bootstrap dev VM
 # mt-*: a separate multi-tenant validation stack (project onyx-mt, 127.0.0.1:3200).
 # mt-down keeps its volumes; mt-destroy removes them. See product/deploy/mt/README.md.
 # inventory, cutover, rollback, saas-*: the production multi-tenant stack (project onyx-saas)
-# on the public URL. See docs/product/MULTI-TENANT.md, section 6.
+# on the public URL. cutover moves the owner_email account and the other real accounts.
+# saas-journey: customer-journey test; saas-defaults: platform defaults for every company;
+# saas-update: deploy a commit on onyx-saas. See docs/product/MULTI-TENANT.md, sections 6-7.
 # assistant-prompt, chat-check: default assistant prompt and chat checks on the live stack.
 # See product/deploy/RUNBOOK.md.
 
@@ -44,6 +46,11 @@ on:
           - saas-check
           - saas-check-after-restart
           - saas-restart
+          - saas-journey
+          - saas-journey-after-restart
+          - saas-defaults
+          - saas-defaults-dry-run
+          - saas-update
           - saas-down
           - assistant-prompt
           - chat-check
@@ -56,7 +63,7 @@ on:
         type: string
         default: ""
       owner_email:
-        description: Workspace owner to grant admin access (owner only)
+        description: Workspace owner (owner, inventory and cutover)
         type: string
         default: ravi80847949@gmail.com
       invite_email:
@@ -241,19 +248,29 @@ jobs:
             mt-restart) args="mt-restart ${GITHUB_SHA}" ;;
             mt-down) args="mt-down" ;;
             mt-destroy) args="mt-destroy" ;;
-            inventory) args="inventory ${GITHUB_SHA}" ;;
-            cutover)
-              # The value goes into the remote command line, so allow only a plain address.
-              if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
-                echo "::error::Give letsencrypt_email for the cutover action."
-                exit 1
+            inventory | cutover)
+              # The values go into the remote command line, so allow only plain addresses.
+              email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+              if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+                echo "::error::owner_email is not a plain email address."; exit 1
               fi
-              args="cutover ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+              if [[ "${BOOTSTRAP_ACTION}" == inventory ]]; then
+                args="inventory ${GITHUB_SHA} ${OWNER_EMAIL}"
+              elif [[ ! "${LETSENCRYPT_EMAIL}" =~ ${email_re} ]]; then
+                echo "::error::Give letsencrypt_email for the cutover action."; exit 1
+              else
+                args="cutover ${GITHUB_SHA} ${LETSENCRYPT_EMAIL} ${OWNER_EMAIL}"
+              fi
               ;;
             rollback) args="rollback ${GITHUB_SHA}" ;;
             saas-check) args="saas-check ${GITHUB_SHA}" ;;
             saas-check-after-restart) args="saas-check ${GITHUB_SHA} after-restart" ;;
             saas-restart) args="saas-restart ${GITHUB_SHA}" ;;
+            saas-journey) args="saas-journey ${GITHUB_SHA}" ;;
+            saas-journey-after-restart) args="saas-journey ${GITHUB_SHA} after-restart" ;;
+            saas-defaults) args="saas-defaults ${GITHUB_SHA}" ;;
+            saas-defaults-dry-run) args="saas-defaults ${GITHUB_SHA} dry-run" ;;
+            saas-update) args="saas-update ${GITHUB_SHA}" ;;
             saas-down) args="saas-down ${GITHUB_SHA}" ;;
             assistant-prompt)
               if [[ ! "${ASSISTANT_MODE}" =~ ^(set|reset|show)$ ]]; then

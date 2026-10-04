@@ -11,9 +11,12 @@
 #        vm-bootstrap.sh keygen
 #        vm-bootstrap.sh mt-up <full commit SHA> | mt-check <full commit SHA> [after-restart]
 #        vm-bootstrap.sh mt-restart <full commit SHA> | mt-down | mt-destroy
-#        vm-bootstrap.sh inventory <full commit SHA>
-#        vm-bootstrap.sh cutover <full commit SHA> <letsencrypt email> | rollback <full commit SHA>
+#        vm-bootstrap.sh inventory <full commit SHA> [owner email]
+#        vm-bootstrap.sh cutover <full commit SHA> <letsencrypt email> <owner email>
+#        vm-bootstrap.sh rollback <full commit SHA>
 #        vm-bootstrap.sh saas-check <full commit SHA> [after-restart] | saas-restart <full commit SHA>
+#        vm-bootstrap.sh saas-journey <full commit SHA> [after-restart]
+#        vm-bootstrap.sh saas-defaults <full commit SHA> [dry-run] | saas-update <full commit SHA>
 #        vm-bootstrap.sh saas-down <full commit SHA>
 #        vm-bootstrap.sh assistant-prompt <full commit SHA> <set|reset|show> | chat-check <full commit SHA>
 # Layout on the VM: /srv/onyx-src (clone of the fork), /srv/onyx (release files, .env,
@@ -84,10 +87,13 @@ main() {
     rollback) rollback_wrapper "$@" ;;
     saas-check) saas_check_wrapper "$@" ;;
     saas-restart) saas_restart_wrapper "$@" ;;
+    saas-journey) saas_journey_wrapper "$@" ;;
+    saas-defaults) saas_defaults_wrapper "$@" ;;
+    saas-update) saas_update_wrapper "$@" ;;
     saas-down) saas_down_wrapper "$@" ;;
     assistant-prompt) assistant_prompt_wrapper "$@" ;;
     chat-check) chat_check_wrapper "$@" ;;
-    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha> | keygen | mt-up <sha> | mt-check <sha> [after-restart] | mt-restart <sha> | mt-down | mt-destroy | inventory <sha> | cutover <sha> <email> | rollback <sha> | saas-check <sha> [after-restart] | saas-restart <sha> | saas-down <sha> | assistant-prompt <sha> <set|reset|show> | chat-check <sha>" ;;
+    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha> | keygen | mt-up <sha> | mt-check <sha> [after-restart] | mt-restart <sha> | mt-down | mt-destroy | inventory <sha> [owner email] | cutover <sha> <email> <owner email> | rollback <sha> | saas-check <sha> [after-restart] | saas-restart <sha> | saas-journey <sha> [after-restart] | saas-defaults <sha> [dry-run] | saas-update <sha> | saas-down <sha> | assistant-prompt <sha> <set|reset|show> | chat-check <sha>" ;;
   esac
 }
 
@@ -827,6 +833,11 @@ is_email() {
   [[ "$1" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]
 }
 
+# A plain address without quotes or spaces. The account SQL embeds the owner address.
+is_plain_email() {
+  [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]
+}
+
 # Shared start of the actions that talk to the live API as the admin test user.
 live_action_start() {
   local sha="$1"
@@ -905,6 +916,10 @@ configure_model() {
   fi
   live_action_start "${sha}"
   python3 "${ONYX_SRC_DIR}/product/deploy/configure-model.py" --base-url "${LIVE_URL}"
+  # saas_prepare copies these into the platform defaults of the multi-tenant stack.
+  set_env_key MODEL_PROVIDER "${provider}" "${SECRETS_DIR}/model.env"
+  set_env_key MODEL_NAME "${model}" "${SECRETS_DIR}/model.env"
+  echo "Wrote MODEL_PROVIDER and MODEL_NAME into ${SECRETS_DIR}/model.env."
 }
 
 # Writes the SMTP values from smtp.env into .env and recreates the services that read them.
@@ -1373,6 +1388,12 @@ readonly SAAS_URL="https://${DNS_NAME}"
 readonly SAAS_TAG_FILE="${SAAS_DIR}/saas-tag"
 readonly SAAS_SALT_FILE="${SAAS_DIR}/saas-salt"
 readonly SAAS_STATE_FILE="${SAAS_DIR}/mt_state.json"
+# saas-journey: the customer-journey test (saas_journey.py).
+readonly SAAS_JOURNEY_TAG_FILE="${SAAS_DIR}/journey-tag"
+readonly SAAS_JOURNEY_SALT_FILE="${SAAS_DIR}/journey-salt"
+readonly SAAS_JOURNEY_STATE_FILE="${SAAS_DIR}/journey_state.json"
+# The live rows of the accounts that cutover moves (mode 600, holds password hashes).
+readonly SAAS_TRANSFER_FILE="${SAAS_DIR}/account-transfer.json"
 readonly LIVE_DATA_DIR="${ONYX_DEPLOY_DIR}/deployment/data"
 readonly SAAS_DATA_DIR="${SAAS_DIR}/deployment/data"
 # 1 while cutover has the live stack stopped and onyx-saas is not yet healthy.
@@ -1391,21 +1412,46 @@ saas_compose_files_present() {
   stack_files_present "${SAAS_COMPOSE_DIR}" "${SAAS_COMPOSE_FILES[@]}"
 }
 
-# Runs mt_checks.py against the production stack. Mode: empty or after-restart. With
-# secrets/model.env, the company checks also configure the model; the values stay in the env.
+# Runs mt_checks.py against the production stack. Mode: empty or after-restart. It configures
+# no model here: the platform image supplies it (saas-journey checks that). mt_checks.py
+# configures a model only when MODEL_API_KEY is in its environment, as on the mt stack.
 saas_run_checks() {
-  (
-    if [[ -f "${SECRETS_DIR}/model.env" ]]; then
-      # shellcheck disable=SC1090,SC1091
-      source "${SECRETS_DIR}/model.env"
-      export MODEL_API_KEY="${MODEL_API_KEY:-}" MODEL_PROVIDER="${MODEL_PROVIDER:-}" \
-        MODEL_NAME="${MODEL_NAME:-}" MODEL_API_BASE="${MODEL_API_BASE:-}"
-      echo "model.env found: the company checks configure the model"
-    else
-      echo "No ${SECRETS_DIR}/model.env: the chat checks are skipped."
-    fi
-    stack_run_checks "${SAAS_URL}" "${SAAS_TAG_FILE}" "${SAAS_SALT_FILE}" "${SAAS_STATE_FILE}" saas "${1:-}"
-  )
+  stack_run_checks "${SAAS_URL}" "${SAAS_TAG_FILE}" "${SAAS_SALT_FILE}" "${SAAS_STATE_FILE}" saas "${1:-}"
+}
+
+# Runs one psql script from stdin in the onyx-saas database. Values reach psql only through
+# the script (\set lines), never through the command line.
+saas_psql() {
+  local env_file="${SAAS_COMPOSE_DIR}/.env" user db
+  user="$(stack_env_value "${env_file}" POSTGRES_USER)"
+  db="$(stack_env_value "${env_file}" POSTGRES_DB)"
+  saas_compose exec -T relational_db psql -U "${user:-postgres}" -d "${db:-postgres}" \
+    -v ON_ERROR_STOP=1 -qAt -f -
+}
+
+# Prints the result of one SQL statement in the onyx-saas database.
+saas_sql_value() {
+  saas_psql <<<"$1"
+}
+
+# Deletes the per-IP sign-up counters (SIGNUP_RATE_LIMIT_ENABLED, 5 sign-ups per hour) before
+# the sign-ups of this script. The counters live in Redis only.
+saas_reset_signup_limit() {
+  if saas_compose exec -T cache sh -c \
+    "redis-cli --scan --pattern 'signup_rate:*' | xargs -r redis-cli del >/dev/null"; then
+    echo "Reset the per-IP sign-up counters (signup_rate:*)."
+  else
+    echo "WARNING: could not reset the sign-up counters. Sign-ups can get 429." >&2
+  fi
+}
+
+# Applies the platform defaults (model, knowledge rules) to every tenant that lacks them.
+# onyx.axi.backfill comes with ONYX_BACKEND_IMAGE_CLOUD. It never overwrites a company setting.
+saas_backfill() {
+  local -a args=()
+  [[ "${1:-}" != dry-run ]] || args=(--dry-run)
+  section "platform defaults for every tenant (onyx.axi.backfill ${args[*]})"
+  saas_compose exec -T api_server python -m onyx.axi.backfill "${args[@]}"
 }
 
 # The volumes of both projects. The live volumes (onyx_*) must always be in the list.
@@ -1424,15 +1470,22 @@ saas_report() {
 # ----- inventory
 
 inventory_wrapper() {
-  local sha="${1:-}"
+  local sha="${1:-}" owner="${2:-}"
   check_sha "${sha}"
-  with_evidence inventory inventory_live "${sha}"
+  [[ -z "${owner}" ]] || is_plain_email "${owner}" || die "The owner email is not a plain address."
+  with_evidence inventory inventory_live "${sha}" "${owner}"
 }
 
 # Runs one SQL statement in the live Postgres and prints the rows. Errors are silent.
 live_sql() {
   live_compose exec -T relational_db psql -U "$(live_env_value POSTGRES_USER postgres)" \
     -d "$(live_env_value POSTGRES_DB postgres)" -v ON_ERROR_STOP=1 -At -c "$1" 2>/dev/null
+}
+
+# Like live_sql, with tab-separated fields and visible errors. For rows that go to a pipe.
+live_sql_tsv() {
+  live_compose exec -T relational_db psql -U "$(live_env_value POSTGRES_USER postgres)" \
+    -d "$(live_env_value POSTGRES_DB postgres)" -v ON_ERROR_STOP=1 -qAt -F $'\t' -c "$1"
 }
 
 # Prints "<label>: <value>" or "<label>: query failed". One failed query stops nothing.
@@ -1457,10 +1510,68 @@ except Exception:
 ' "$1" "$2"
 }
 
+# SQL expression: the category of a "user" row. <owner> must pass is_plain_email (or be empty).
+# v4.8.4 keeps API keys and bots as rows with account_type other than STANDARD; API key rows
+# also have an address that ends in onyxapikey.ai (onyx/db/api_key.py).
+account_category_sql() {
+  local owner="$1"
+  echo "CASE WHEN lower(email) = lower('${owner}') THEN 'owner'" \
+    "WHEN lower(email) LIKE '%@example.com' THEN 'synthetic'" \
+    "WHEN account_type <> 'STANDARD' OR lower(email) LIKE '%onyxapikey.ai'" \
+    "OR lower(email) IN ('anonymous@onyx.app', 'no-auth-placeholder@onyx.app') THEN 'service'" \
+    "ELSE 'other' END"
+}
+
+# Admin in v4.8.4 is the permission "admin" in effective_permissions (membership of the Admin
+# group, onyx/db/users.py user_is_admin). The column "role" is a tombstone.
+readonly ADMIN_SQL="effective_permissions @> '[\"admin\"]'::jsonb"
+
+# Per category: users, active users, admins, chat sessions, user files. Prints "query failed"
+# lines on error. Without effective_permissions the admin count is "unknown".
+inventory_accounts() {
+  local owner="$1" category sql rows admin="${ADMIN_SQL}"
+  category="$(account_category_sql "${owner}")"
+  sql="WITH u AS (SELECT id, ${category} AS c, is_active, @ADMIN@ AS adm FROM \"user\"),
+s AS (SELECT user_id, count(*) AS n FROM chat_session GROUP BY user_id),
+f AS (SELECT user_id, count(*) AS n FROM user_file GROUP BY user_id)
+SELECT u.c, count(*), count(*) FILTER (WHERE u.is_active),
+  count(*) FILTER (WHERE u.adm),
+  coalesce(sum(s.n), 0), coalesce(sum(f.n), 0)
+FROM u LEFT JOIN s ON s.user_id = u.id LEFT JOIN f ON f.user_id = u.id GROUP BY u.c ORDER BY u.c"
+  rows="$(live_sql "${sql//@ADMIN@/${admin}}")" || {
+    admin="NULL::boolean"
+    rows="$(live_sql "${sql//@ADMIN@/${admin}}")" || { echo "accounts by category: query failed"; return 0; }
+  }
+  [[ "${admin}" == "${ADMIN_SQL}" ]] || echo "(no effective_permissions column: admin unknown)"
+  printf '%-10s %6s %6s %7s %13s %10s\n' category users active admins chat_sessions user_files
+  local c users active admins chats files
+  while IFS='|' read -r c users active admins chats files; do
+    [[ -n "${c}" ]] || continue
+    # A NULL admin flag counts as 0 in FILTER; show "unknown" when the column is missing.
+    [[ "${admin}" == "${ADMIN_SQL}" ]] || admins=unknown
+    printf '%-10s %6s %6s %7s %13s %10s\n' "${c}" "${users}" "${active}" "${admins}" "${chats}" "${files}"
+  done <<<"${rows}"
+  if [[ -z "${owner}" ]]; then
+    echo "owner: no owner email given"
+  elif grep -q '^owner|' <<<"${rows}"; then
+    if [[ "${admin}" != "${ADMIN_SQL}" ]]; then
+      echo "owner ${owner}: present, admin unknown"
+    elif grep -q '^owner|[0-9]*|[0-9]*|1|' <<<"${rows}"; then
+      echo "owner ${owner}: present, admin yes"
+    else
+      echo "owner ${owner}: present, admin no"
+    fi
+  else
+    echo "owner ${owner}: not present"
+  fi
+  echo "Categories: owner = the owner email; synthetic = @example.com test accounts;"
+  echo "service = API keys, bots and placeholders; other = other real accounts (count only)."
+}
+
 # Read-only inventory of the live single-tenant stack before the cutover. The log shows
 # counts only. The emails and connector names go to inventory.txt (mode 600) in the evidence folder.
 inventory_live() {
-  local sha="$1" report="${EVIDENCE_DIR}/inventory.txt" users_total
+  local sha="$1" owner="$2" report="${EVIDENCE_DIR}/inventory.txt" users_total
   section "vm-bootstrap inventory ${sha} $(date -u +%FT%TZ)"
   docker_setup
   [[ -f "${COMPOSE_DIR}/.env" ]] || die "${COMPOSE_DIR}/.env is missing. Run the install action first."
@@ -1472,7 +1583,7 @@ inventory_live() {
   users_total="$(live_sql 'SELECT count(*) FROM "user"' || echo '?')"
   echo "users: ${users_total}"
   live_count "active users" 'SELECT count(*) FROM "user" WHERE is_active'
-  live_count "admins (role = ADMIN)" "SELECT count(*) FROM \"user\" WHERE role = 'ADMIN'"
+  live_count "admins (permission admin)" "SELECT count(*) FROM \"user\" WHERE ${ADMIN_SQL}"
   echo "connectors by source:"
   live_sql "SELECT '  ' || source || ': ' || count(*) FROM connector GROUP BY source ORDER BY source" ||
     echo "  query failed"
@@ -1487,12 +1598,22 @@ inventory_live() {
   live_count "document_set" 'SELECT count(*) FROM document_set'
   live_count "user_group (EE table)" 'SELECT count(*) FROM user_group'
 
+  section "accounts by category"
+  inventory_accounts "${owner}"
+
+  section "account transfer plan (dry run, nothing is written)"
+  if [[ -z "${owner}" ]]; then
+    echo "No owner email given: no transfer plan."
+  else
+    transfer_collect "${owner}" dry-run || echo "transfer plan: blocked (see above)"
+  fi
+
   section "detailed report"
   install -m 600 /dev/null "${report}"
   {
     echo "# inventory of the live stack, ${sha}, $(date -u +%FT%TZ)"
-    echo "## users (email, role, is_active)"
-    live_sql 'SELECT email, role, is_active FROM "user" ORDER BY email' ||
+    echo "## users (email, category, account_type, is_active, admin)"
+    live_sql "SELECT email, $(account_category_sql "${owner}"), account_type, is_active, ${ADMIN_SQL} FROM \"user\" ORDER BY email" ||
       live_sql 'SELECT email, is_active FROM "user" ORDER BY email' || echo "query failed"
     echo "## connectors (id, name, source)"
     live_sql 'SELECT id, name, source FROM connector ORDER BY id' || echo "query failed"
@@ -1502,11 +1623,12 @@ inventory_live() {
   section "API counts"
   inventory_api || echo "API counts skipped (see above)."
 
-  section "Needs recreation or manual transfer after cutover:"
-  echo "- Accounts: ${users_total} in the live stack. Every account must sign up again on the new stack."
-  echo "  The first sign-up of an email creates its company and makes it admin. Passwords are not copied."
-  echo "- Connectors, documents, chats and files stay in the old volumes (project onyx). They are not migrated."
-  echo "- The LLM provider and the settings must be configured again in each company."
+  section "What the cutover does with the data"
+  echo "- Accounts: the owner and the active other real accounts move with their password"
+  echo "  hashes (see the plan above). The owner gets a new company with the platform model."
+  echo "  Synthetic @example.com accounts and service accounts do not move."
+  echo "- Connectors, documents, chats, assistants and files stay in the old volumes (project onyx)."
+  echo "  They are not migrated. rollback makes them reachable again."
 }
 
 # Counts through the public API as the admin test user. Returns 1 when the login fails.
@@ -1542,22 +1664,79 @@ inventory_api() {
   fi
 }
 
+# ----- account transfer
+
+# SQL: the live rows that cutover moves (owner and other real accounts), tab separated:
+# email, hashed_password, is_active, is_verified, admin.
+transfer_rows_sql() {
+  echo "SELECT email, hashed_password, is_active, is_verified, ${ADMIN_SQL} FROM \"user\"" \
+    "WHERE ($(account_category_sql "$1")) IN ('owner', 'other') ORDER BY email"
+}
+
+# Reads the transfer rows of the live database. Mode dry-run prints the plan only; mode write
+# also writes SAAS_TRANSFER_FILE (mode 600). The hashes go only through the pipe and the file.
+# Fails when the owner row is missing or the transfer cannot run.
+transfer_collect() {
+  local owner="$1" mode="$2" limit=5 env_file="${SAAS_COMPOSE_DIR}/.env"
+  local tool="${ONYX_SRC_DIR}/product/deploy/transfer_accounts.py"
+  local -a out=(--dry-run)
+  [[ "${mode}" != write ]] || out=(--file "${SAAS_TRANSFER_FILE}")
+  # saas_merge_secrets copies secrets/saas.env into the saas .env, so both can switch it off.
+  local file
+  for file in "${env_file}" "${SECRETS_DIR}/saas.env"; do
+    if [[ -f "${file}" && "$(stack_env_value "${file}" SIGNUP_RATE_LIMIT_ENABLED)" == false ]]; then
+      limit=0
+    fi
+  done
+  live_sql_tsv "$(transfer_rows_sql "${owner}")" |
+    python3 "${tool}" collect --owner "${owner}" --signup-limit "${limit}" "${out[@]}"
+}
+
+# Moves the accounts of SAAS_TRANSFER_FILE into onyx-saas, which must serve SAAS_URL:
+# 1. Signs up the owner with a random one-time password (the native sign-up: new company,
+#    owner admin, platform defaults), invites and signs up each other account with its own
+#    one-time password, and grants admin access to the former admins (transfer_accounts.py).
+# 2. Copies each old password hash into the owner's tenant schema in one transaction and
+#    reads it back. The one-time passwords exist only inside step 1 and are discarded.
+# An account that already has a company in onyx-saas (an earlier cutover) is not signed up
+# again. Any failure stops the script; on_cutover_exit then starts the live stack again.
+transfer_accounts() {
+  local owner="$1" file="${SAAS_TRANSFER_FILE}" schema
+  local tool="${ONYX_SRC_DIR}/product/deploy/transfer_accounts.py"
+  section "account transfer into ${SAAS_PROJECT}"
+  [[ -f "${file}" ]] || die "${file} is missing. The account transfer did not run."
+  saas_reset_signup_limit
+  python3 "${tool}" mapping-sql --file "${file}" | saas_psql | python3 "${tool}" mark --file "${file}" ||
+    die "The account transfer could not read the onyx-saas mappings."
+  python3 "${tool}" register --file "${file}" --base-url "${SAAS_URL}" ||
+    die "The sign-up step of the account transfer failed."
+  schema="$(saas_sql_value "SELECT tenant_id FROM public.user_tenant_mapping WHERE email = lower('${owner}') AND active")" ||
+    die "The owner's company lookup failed."
+  [[ "${schema}" =~ ^tenant_[0-9a-f-]+$ ]] || die "The owner has no active company in ${SAAS_PROJECT}."
+  python3 "${tool}" copy-sql --file "${file}" --schema "${schema}" | saas_psql |
+    python3 "${tool}" verify --file "${file}" --schema "${schema}" ||
+    die "The password hash copy of the account transfer failed."
+  echo "The one-time passwords are discarded. Each account logs in with its old password."
+}
+
 # ----- cutover
 
 cutover_wrapper() {
-  local sha="${1:-}" email="${2:-}"
+  local sha="${1:-}" email="${2:-}" owner="${3:-}"
   check_sha "${sha}"
   is_email "${email}" || die "Give the Let's Encrypt account email (the one of the https action)."
-  with_evidence cutover cutover "${sha}" "${email}"
+  is_plain_email "${owner}" || die "Give the owner email (a plain address) as the third argument."
+  with_evidence cutover cutover "${sha}" "${email}" "${owner}"
 }
 
-# Moves the public URL from project onyx to project onyx-saas. Order: checks, cold backup,
-# saas folder and .env, certificate copy, pull, stop onyx, start onyx-saas, health checks.
-# A failed start stops onyx-saas and starts onyx again. onyx never gets "down"; its volumes stay.
-# $2 is the Let's Encrypt email. The wrapper validates it; the account itself travels inside
-# certbot/conf. The log never shows it.
+# Moves the public URL from project onyx to project onyx-saas. Order: checks, transfer plan,
+# cold backup, saas folder and .env, certificate copy, pull, read the accounts, stop onyx,
+# start onyx-saas, health checks, account transfer, platform defaults for every tenant.
+# A failure after the stop stops onyx-saas and starts onyx again. onyx never gets "down";
+# its volumes stay. $2 is the Let's Encrypt email. The wrapper validates it; the account
+# itself travels inside certbot/conf. The log never shows it. $3 is the owner email.
 cutover() {
-  local sha="$1" backup_dir
+  local sha="$1" owner="$3" backup_dir
   section "vm-bootstrap cutover ${sha} $(date -u +%FT%TZ)"
   docker info >/dev/null 2>&1 ||
     die "docker does not work without sudo. backup.sh needs it. Log in again after the install action."
@@ -1573,6 +1752,11 @@ cutover() {
   sudo -n test -f "${LIVE_DATA_DIR}/certbot/conf/live/${DNS_NAME}/fullchain.pem" ||
     die "No certificate for ${DNS_NAME} in ${LIVE_DATA_DIR}/certbot/conf. Run the https action first."
   checkout_source "${sha}"
+  saas_cloud_backend_image >/dev/null
+  [[ -f "${SECRETS_DIR}/model.env" || -f "${SECRETS_DIR}/model.sealed" ]] ||
+    die "${SECRETS_DIR}/model.env is missing. Run the model action first. Nothing was changed."
+  section "account transfer plan"
+  transfer_collect "${owner}" dry-run || die "The account transfer cannot run. Nothing was changed."
 
   backup_dir="${BACKUP_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)-pre-cutover"
   section "cold backup of the live stack into ${backup_dir}"
@@ -1586,6 +1770,9 @@ cutover() {
   section "docker compose -p ${SAAS_PROJECT} pull"
   saas_compose pull --quiet
 
+  section "account transfer: read the live accounts"
+  transfer_collect "${owner}" write || die "The live accounts could not be read. Nothing was changed."
+
   section "stopping the live stack (project onyx, volumes stay)"
   trap 'on_cutover_exit' EXIT
   CUTOVER_LIVE_STOPPED=1
@@ -1595,6 +1782,8 @@ cutover() {
   wait_health "${SAAS_URL}" || die "${SAAS_PROJECT} is not healthy at ${SAAS_URL}."
   PUBLIC_URL="${SAAS_URL}"
   check_public_url || die "The public URL checks failed on ${SAAS_PROJECT}."
+  transfer_accounts "${owner}"
+  saas_backfill || die "The platform defaults could not be applied to every tenant."
   CUTOVER_LIVE_STOPPED=0
   show "file store bucket job" saas_compose logs --no-log-prefix mt_minio_bucket
   saas_report
@@ -1608,10 +1797,15 @@ on_cutover_exit() {
   local code=$?
   if ((CUTOVER_LIVE_STOPPED)); then
     echo "cutover failed (exit ${code}) while the live stack was stopped. Stopping ${SAAS_PROJECT} and starting onyx again." >&2
+    echo "Accounts that the transfer created stay in the ${SAAS_PROJECT} volumes; the next cutover reuses them." >&2
     saas_compose stop || true
     live_compose start || true
     set_live_url
-    wait_health "${LIVE_URL}" || echo "ERROR: the live stack is not healthy. Run the rollback action." >&2
+    if wait_health "${LIVE_URL}"; then
+      echo "The live stack (project onyx) serves ${LIVE_URL} again. The cutover did not happen." >&2
+    else
+      echo "ERROR: the live stack is not healthy. Run the rollback action." >&2
+    fi
   fi
 }
 
@@ -1625,10 +1819,42 @@ verify_backup() {
   ls -la "${backup_dir}"
 }
 
+# Prints ONYX_BACKEND_IMAGE_CLOUD of release.env, or stops when it is empty.
+saas_cloud_backend_image() {
+  local image
+  image="$(release_value ONYX_BACKEND_IMAGE_CLOUD)"
+  [[ -n "${image}" ]] ||
+    die "ONYX_BACKEND_IMAGE_CLOUD is empty in release.env. Run axi-build-backend.yml and pin its digest first: without that image new companies get no platform model, so the customer journey fails. Nothing was changed."
+  echo "${image}"
+}
+
+# Copies the platform model from secrets/model.env into <env file> as FIREWORKS_DEFAULT_*.
+# The cloud backend image reads them when it sets up a company. Key names only in the log.
+saas_model_defaults() {
+  local env_file="$1" file="${SECRETS_DIR}/model.env"
+  if [[ -f "${SECRETS_DIR}/model.sealed" ]]; then
+    unseal_model_key
+  fi
+  [[ -f "${file}" ]] ||
+    die "${file} is missing. Run the model action first: every new company gets the platform model from it."
+  (
+    # shellcheck disable=SC1090,SC1091
+    source "${file}"
+    [[ -n "${MODEL_API_KEY:-}" ]] || die "MODEL_API_KEY is empty in ${file}."
+    [[ -n "${MODEL_NAME:-}" ]] ||
+      die "MODEL_NAME is missing in ${file}. Run the model action with the model id once."
+    set_env_key FIREWORKS_DEFAULT_API_KEY "${MODEL_API_KEY}" "${env_file}"
+    set_env_key FIREWORKS_DEFAULT_MODEL "${MODEL_NAME}" "${env_file}"
+    set_env_key FIREWORKS_DEFAULT_PROVIDER "${MODEL_PROVIDER:-fireworks_ai}" "${env_file}"
+    set_env_key FIREWORKS_DEFAULT_API_BASE "${MODEL_API_BASE:-}" "${env_file}"
+  )
+  echo "Set from ${file} (values not shown): FIREWORKS_DEFAULT_API_KEY FIREWORKS_DEFAULT_MODEL FIREWORKS_DEFAULT_PROVIDER FIREWORKS_DEFAULT_API_BASE"
+}
+
 # Creates the saas folder, exports the release files and the overlays, and writes .env once.
-# Every run pins the domain, the compose files and the cloud web image.
+# Every run pins the domain, the compose files, the cloud images and the platform model.
 saas_prepare() {
-  local sha="$1" env_file="${SAAS_COMPOSE_DIR}/.env" cloud_image
+  local sha="$1" env_file="${SAAS_COMPOSE_DIR}/.env" cloud_image backend_image
   section "production multi-tenant folder ${SAAS_DIR}"
   if [[ ! -d "${SAAS_DIR}" ]]; then
     sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${SAAS_DIR}" || die "sudo -n cannot create ${SAAS_DIR}."
@@ -1638,6 +1864,7 @@ saas_prepare() {
   export_overlay "${sha}" product/deploy/compose.https.yml "${SAAS_COMPOSE_DIR}"
   cloud_image="$(release_value ONYX_WEB_SERVER_IMAGE_CLOUD)"
   [[ -n "${cloud_image}" ]] || die "ONYX_WEB_SERVER_IMAGE_CLOUD is missing in release.env."
+  backend_image="$(saas_cloud_backend_image)"
   if [[ -f "${env_file}" ]]; then
     echo "${env_file} exists. The script keeps its secrets."
   else
@@ -1652,9 +1879,12 @@ saas_prepare() {
   stack_env_pin "${env_file}" WEB_DOMAIN "${SAAS_URL}"
   # The multi-tenant stack needs the web build with NEXT_PUBLIC_CLOUD_ENABLED=true.
   stack_env_pin "${env_file}" ONYX_WEB_SERVER_IMAGE "${cloud_image}"
-  echo "Set DOMAIN, WEB_DOMAIN and ONYX_WEB_SERVER_IMAGE (cloud build) in ${env_file}."
+  # The backend build that gives every new company the platform model and knowledge rules.
+  stack_env_pin "${env_file}" ONYX_BACKEND_IMAGE "${backend_image}"
+  echo "Set DOMAIN, WEB_DOMAIN, ONYX_WEB_SERVER_IMAGE and ONYX_BACKEND_IMAGE (cloud builds) in ${env_file}."
   stack_env_pin_compose "${env_file}" "${SAAS_PROJECT}" "${SAAS_COMPOSE_FILES[@]}"
   stack_env_settings "${env_file}"
+  saas_model_defaults "${env_file}"
   saas_merge_secrets "${env_file}"
 }
 
@@ -1774,13 +2004,15 @@ saas_restart_wrapper() {
   with_evidence saas-restart saas_restart "${sha}"
 }
 
-# Recreates the onyx-saas containers and repeats the read checks. "down" never gets -v.
+# Recreates the onyx-saas containers and repeats the customer journey read checks.
+# "down" never gets -v.
 saas_restart() {
   local sha="$1" volumes_before volumes_after
   section "vm-bootstrap saas-restart ${sha} $(date -u +%FT%TZ)"
   docker_setup
   saas_compose_files_present || die "The files in ${SAAS_COMPOSE_DIR} are missing. Run the cutover action first."
-  [[ -f "${SAAS_STATE_FILE}" ]] || die "${SAAS_STATE_FILE} is missing. Run the saas-check action first."
+  [[ -f "${SAAS_JOURNEY_STATE_FILE}" ]] ||
+    die "${SAAS_JOURNEY_STATE_FILE} is missing. Run the saas-journey action first."
   saas_must_serve
   checkout_source "${sha}"
 
@@ -1795,9 +2027,102 @@ saas_restart() {
   volumes_after="$(dk volume ls -q --filter "label=com.docker.compose.project=${SAAS_PROJECT}" | sort)"
   echo "volumes: ${volumes_after//$'\n'/ }"
   run_step volumes-kept test -n "${volumes_after}" -a "${volumes_before}" = "${volumes_after}"
-  run_step saas-check-after-restart saas_run_checks after-restart
+  run_step saas-journey-after-restart saas_run_journey after-restart
   saas_report
   summary
+}
+
+# ----- saas-journey, saas-defaults, saas-update
+
+# Runs saas_journey.py against the public URL. Mode: empty or after-restart. A first run gets
+# a new tag (two new test companies); after-restart reuses the tag of the last first run.
+# MODEL_API_KEY goes into the environment of the test only so that it can check that no
+# response body holds the key. The test never sends it.
+saas_run_journey() {
+  local mode="${1:-}" tag key=""
+  local journey="${ONYX_SRC_DIR}/product/test-corpus/saas_journey.py"
+  [[ -f "${journey}" ]] || { echo "ERROR: ${journey} is missing at this commit." >&2; return 1; }
+  if [[ "${mode}" != after-restart ]]; then
+    rm -f "${SAAS_JOURNEY_TAG_FILE}"
+    saas_reset_signup_limit
+  fi
+  stack_ensure_check_secrets "${SAAS_JOURNEY_TAG_FILE}" "${SAAS_JOURNEY_SALT_FILE}" journey
+  tag="$(cat "${SAAS_JOURNEY_TAG_FILE}")"
+  local -a args=(--base-url "${SAAS_URL}" --tag "${tag}" --state "${SAAS_JOURNEY_STATE_FILE}")
+  [[ "${mode}" != after-restart ]] || args+=(--after-restart)
+  if [[ -f "${SECRETS_DIR}/model.env" ]]; then
+    key="$(
+      # shellcheck disable=SC1090,SC1091
+      source "${SECRETS_DIR}/model.env"
+      printf '%s' "${MODEL_API_KEY:-}"
+    )"
+    echo "model.env found: the journey checks that no response holds the platform key."
+  else
+    echo "No ${SECRETS_DIR}/model.env: the journey checks the masked key field only."
+  fi
+  MODEL_API_KEY="${key}" MT_PASSWORD_SALT="$(cat "${SAAS_JOURNEY_SALT_FILE}")" \
+    python3 "${journey}" "${args[@]}"
+}
+
+saas_journey_wrapper() {
+  local sha="${1:-}" mode="${2:-}"
+  check_sha "${sha}"
+  [[ -z "${mode}" || "${mode}" == after-restart ]] || die "The second argument must be after-restart or empty."
+  with_evidence saas-journey saas_journey "${sha}" "${mode}"
+}
+
+saas_journey() {
+  local sha="$1" mode="$2"
+  section "vm-bootstrap saas-journey ${sha} $(date -u +%FT%TZ) (mode=${mode:-first})"
+  docker_setup
+  saas_must_serve
+  checkout_source "${sha}"
+  saas_run_journey "${mode}"
+}
+
+saas_defaults_wrapper() {
+  local sha="${1:-}" mode="${2:-}"
+  check_sha "${sha}"
+  [[ -z "${mode}" || "${mode}" == dry-run ]] || die "The second argument must be dry-run or empty."
+  with_evidence saas-defaults saas_defaults "${sha}" "${mode}"
+}
+
+# Applies the platform defaults to every tenant (also the pre-built pool tenants).
+saas_defaults() {
+  local sha="$1" mode="$2"
+  section "vm-bootstrap saas-defaults ${sha} $(date -u +%FT%TZ) (mode=${mode:-apply})"
+  docker_setup
+  saas_must_serve
+  saas_backfill "${mode}"
+}
+
+saas_update_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence saas-update saas_update "${sha}"
+}
+
+# Deploys <sha> on the running onyx-saas stack: new release files and overlays, the nginx
+# files, the pinned images and the platform model from model.env. The certificate stays. .env keeps its secrets. up -d replaces the
+# changed containers; the volumes stay. axi-deploy-dev.yml never touches onyx-saas.
+saas_update() {
+  local sha="$1"
+  section "vm-bootstrap saas-update ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  saas_must_serve
+  checkout_source "${sha}"
+  saas_prepare "${sha}"
+  saas_copy_https_files "${sha}"
+  section "docker compose -p ${SAAS_PROJECT} pull"
+  saas_compose pull --quiet
+  section "docker compose -p ${SAAS_PROJECT} up -d"
+  saas_compose up -d
+  wait_health "${SAAS_URL}" || die "${SAAS_PROJECT} is not healthy at ${SAAS_URL} after the update."
+  PUBLIC_URL="${SAAS_URL}"
+  check_public_url || die "The public URL checks failed after the update."
+  saas_backfill
+  saas_report
+  section "saas-update complete: ${sha} on ${SAAS_URL}"
 }
 
 saas_down_wrapper() {

@@ -42,8 +42,17 @@ services:
       - SUPER_USERS=[]
       # Default true. Creates the OpenSearch index of a tenant when it is first used.
       - VERIFY_CREATE_OPENSEARCH_INDEX_ON_INIT_MT=true
-      # Upstream opt-in per-IP limit on /auth/register (5 per hour, uses Redis).
-      - SIGNUP_RATE_LIMIT_ENABLED=true
+      # Upstream opt-in per-IP limit on /auth/register (5 per hour, uses Redis). The cutover
+      # account transfer signs up 1 + N accounts; set false in .env only for a larger N.
+      - SIGNUP_RATE_LIMIT_ENABLED=${SIGNUP_RATE_LIMIT_ENABLED:-true}
+      # Platform model and knowledge rules of every new company. Only the cloud backend image
+      # (ONYX_BACKEND_IMAGE_CLOUD) reads them. vm-bootstrap.sh saas_prepare copies the values
+      # from secrets/model.env into .env. Empty values: no platform defaults.
+      - FIREWORKS_DEFAULT_API_KEY=${FIREWORKS_DEFAULT_API_KEY:-}
+      - FIREWORKS_DEFAULT_MODEL=${FIREWORKS_DEFAULT_MODEL:-}
+      - FIREWORKS_DEFAULT_DISPLAY_NAME=${FIREWORKS_DEFAULT_DISPLAY_NAME:-22nd X AI model}
+      - FIREWORKS_DEFAULT_PROVIDER=${FIREWORKS_DEFAULT_PROVIDER:-fireworks_ai}
+      - FIREWORKS_DEFAULT_API_BASE=${FIREWORKS_DEFAULT_API_BASE:-}
     depends_on:
       mt_minio_bucket:
         condition: service_completed_successfully
@@ -66,6 +75,12 @@ services:
       - TARGET_AVAILABLE_TENANTS=1
       - SUPER_USERS=[]
       - VERIFY_CREATE_OPENSEARCH_INDEX_ON_INIT_MT=true
+      # See api_server: the background tasks set up the pre-built (pool) tenants.
+      - FIREWORKS_DEFAULT_API_KEY=${FIREWORKS_DEFAULT_API_KEY:-}
+      - FIREWORKS_DEFAULT_MODEL=${FIREWORKS_DEFAULT_MODEL:-}
+      - FIREWORKS_DEFAULT_DISPLAY_NAME=${FIREWORKS_DEFAULT_DISPLAY_NAME:-22nd X AI model}
+      - FIREWORKS_DEFAULT_PROVIDER=${FIREWORKS_DEFAULT_PROVIDER:-fireworks_ai}
+      - FIREWORKS_DEFAULT_API_BASE=${FIREWORKS_DEFAULT_API_BASE:-}
 
   web_server:
     environment:

@@ -171,8 +171,17 @@ def create_file_connector(
     checks: Checks, session: OnyxSession, file_name: str, name: str
 ) -> dict[str, Any]:
     """Uploads one corpus file and indexes it, as step_index of run_checks does."""
+    return create_files_connector(checks, session, [file_name], name)
+
+
+def create_files_connector(
+    checks: Checks, session: OnyxSession, file_names: list[str], name: str
+) -> dict[str, Any]:
+    """Uploads corpus files (the unchanged copies in CORPUS_DIR) and indexes them."""
     uploaded = session.upload(
-        "/api/manage/admin/connector/file/upload", [CORPUS_DIR / file_name], {}
+        "/api/manage/admin/connector/file/upload",
+        [CORPUS_DIR / file_name for file_name in file_names],
+        {},
     )
     status, connector = session.request(
         "POST",
@@ -221,11 +230,17 @@ def create_file_connector(
     expect(status == 200, f"cc-pair link returned {status}: {link}")
     info = {"name": name, "connector_id": connector["id"], "cc_pair_id": link["data"]}
     log(f"connector {name}", info)
-    wait_for_indexing(checks, session, link["data"], 1)
+    wait_for_indexing(checks, session, link["data"], len(file_names))
     return info
 
 
-def upload_user_file(checks: Checks, session: OnyxSession, tag: str) -> dict[str, Any]:
+def upload_user_file(
+    checks: Checks,
+    session: OnyxSession,
+    tag: str,
+    file_name: str = DOC_A,
+    label: str = "owner A user file",
+) -> dict[str, Any]:
     status, project = session.request(
         "POST",
         "/api/user/projects/create?" + urllib.parse.urlencode({"name": f"MT A {tag}"}),
@@ -233,7 +248,7 @@ def upload_user_file(checks: Checks, session: OnyxSession, tag: str) -> dict[str
     expect(status == 200, f"project create returned {status}: {project}")
     upload = session.upload(
         "/api/user/projects/file/upload",
-        [CORPUS_DIR / DOC_A],
+        [CORPUS_DIR / file_name],
         {"project_id": str(project["id"])},
     )
     file_ids = [str(file["id"]) for file in upload["user_files"]]
@@ -250,7 +265,7 @@ def upload_user_file(checks: Checks, session: OnyxSession, tag: str) -> dict[str
         read_statuses, lambda found: all(s in FILE_END_STATUSES for s in found)
     )
     checks.record(
-        "owner A user file reaches COMPLETED",
+        f"{label} reaches COMPLETED",
         statuses == ["COMPLETED"],
         {"statuses": statuses, "seconds": seconds},
     )
@@ -377,9 +392,7 @@ def setup_data(
     state["user_file_a"] = upload_user_file(checks, owner_a, tag)
     model = model_settings()
     if model is None:
-        log(
-            "MODEL_API_KEY unset: the companies get no model; chat answer checks skipped"
-        )
+        log("MODEL_API_KEY unset", "this run configures no model; chat checks skipped")
         state["model_configured"] = False
     else:
         state["model_configured"] = all(
@@ -499,7 +512,7 @@ def check_model_chat(
 ) -> None:
     """Answers come from the own company's documents only."""
     if not state.get("model_configured"):
-        log("model not configured in the companies: chat answer checks skipped")
+        log("model not configured by this run", "chat answer checks skipped")
         return
     cases = (
         ("owner A", "owner-a", QUERY_A, DOC_A, DOC_B, "1,500"),
