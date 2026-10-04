@@ -273,7 +273,8 @@ configure_host() {
   echo "vm.max_map_count=262144" | sudo -n tee /etc/sysctl.d/99-onyx.conf >/dev/null
   sudo -n sysctl --system >/dev/null
   sysctl vm.max_map_count
-  sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${ONYX_SRC_DIR}" "${ONYX_DEPLOY_DIR}" "${BACKUP_ROOT}"
+  sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${ONYX_SRC_DIR}" "${ONYX_DEPLOY_DIR}" "${BACKUP_ROOT}" \
+    "${ONYX_RESTORE_DIR}"
   command -v git >/dev/null || sudo -n -E apt-get -y install git
 }
 
@@ -629,9 +630,18 @@ start_live() {
 # Restores the backup into a fresh folder on ports 3100 and 8100 while the live stack is stopped.
 isolated_restore() {
   local sha="$1" backup_dir="$2"
-  rm -rf "${ONYX_RESTORE_DIR}"
-  mkdir -p "${RESTORE_COMPOSE_DIR}"
+  # Only root can write /srv, so the folder itself stays and only its content goes.
+  if [[ ! -d "${ONYX_RESTORE_DIR}" ]]; then
+    sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${ONYX_RESTORE_DIR}" || return 1
+  fi
+  find "${ONYX_RESTORE_DIR}" -mindepth 1 -delete || return 1
+  mkdir -p "${RESTORE_COMPOSE_DIR}" || return 1
   export_release_files "${RESTORE_COMPOSE_DIR}" "${sha}" || return 1
+  # export_release_files runs without errexit here. Check its result before the live stack stops.
+  [[ -f "${RESTORE_COMPOSE_DIR}/docker-compose.yml" && -f "${RESTORE_COMPOSE_DIR}/compose.override.yml" ]] || {
+    echo "ERROR: the release files are missing in ${RESTORE_COMPOSE_DIR}. The live stack keeps running." >&2
+    return 1
+  }
   echo "stopping the live stack"
   live_compose stop || return 1
   LIVE_STOPPED=1
