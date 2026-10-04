@@ -1569,7 +1569,8 @@ cutover() {
   set_live_url
   [[ -n "${PUBLIC_URL}" ]] || die "The live .env has no compose.https.yml in COMPOSE_FILE. Run the https action first."
   wait_health "${LIVE_URL}" 60 || die "The live stack is not healthy. Nothing was changed."
-  [[ -f "${LIVE_DATA_DIR}/certbot/conf/live/${DNS_NAME}/fullchain.pem" ]] ||
+  # certbot writes its files as root with mode 700, so the check needs sudo.
+  sudo -n test -f "${LIVE_DATA_DIR}/certbot/conf/live/${DNS_NAME}/fullchain.pem" ||
     die "No certificate for ${DNS_NAME} in ${LIVE_DATA_DIR}/certbot/conf. Run the https action first."
   checkout_source "${sha}"
 
@@ -1683,7 +1684,7 @@ saas_copy_https_files() {
   local sha="$1"
   section "certificate and nginx files"
   mkdir -p "${SAAS_DATA_DIR}/certbot" "${SAAS_DATA_DIR}/nginx-extra"
-  if [[ -d "${SAAS_DATA_DIR}/certbot/conf" ]]; then
+  if sudo -n test -d "${SAAS_DATA_DIR}/certbot/conf"; then
     echo "${SAAS_DATA_DIR}/certbot/conf exists. The script keeps it."
   else
     sudo -n cp -a "${LIVE_DATA_DIR}/certbot/." "${SAAS_DATA_DIR}/certbot/" ||
