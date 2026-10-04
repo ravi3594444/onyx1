@@ -40,6 +40,7 @@ counterpart: the overlay only adds files.
 | `0001-tenant-defaults-hook.patch` | `ee/onyx/server/tenants/provisioning.py` | One import and a call to `apply_platform_defaults` in `setup_tenant`, after `setup_onyx`, in the same tenant session. A failure is logged with `logger.exception` and does not stop the tenant creation; the backfill repairs the tenant later. |
 | `0002-llm-provider-type-key-guard.patch` | `onyx/server/manage/llm/api.py` | Credential protection, see below. `_validate_llm_provider_change` also rejects a changed provider type when the request keeps the stored key (HTTP 400). The provider upsert and the provider test pass the types. |
 | `0002-llm-provider-type-key-guard.patch` | `onyx/server/manage/image_generation/api.py` | The image generation config update passes the types to the same check. |
+| `0003-voice-llm-key-reuse-guard.patch` | `onyx/server/manage/voice/api.py` | Credential protection. A voice provider may copy the key of an LLM provider (`llm_provider_id`) only for the same provider type and API base in multi-tenant mode (HTTP 400 otherwise). Upstream copied it to any voice provider type and target URI. |
 
 The patches are unified diffs relative to `backend/`. Apply them from the export root
 with `patch -p1 --forward --batch --fuzz=0 < <file>`.
@@ -126,6 +127,15 @@ Line numbers are for the unpatched v4.8.4 `backend/`.
   (`onyx/server/manage/image_generation/api.py:89`, `:236`). The config update keeps
   the old key after the same check (`:447`) but takes the provider type from the
   request; patch 0002 adds the type check there.
+- Voice providers: `POST /api/admin/voice/providers` with `llm_provider_id` copied the
+  stored LLM key to any voice provider type and any target URI
+  (`onyx/server/manage/voice/api.py:217-231`). A company admin could so send the platform
+  key to another endpoint. Patch 0003 allows the copy only for the same provider type and
+  API base.
+- Remaining exposure, accepted for the development stack: a company admin sees the first
+  and last 4 characters of the platform key, and can add other models of the same
+  provider to the platform provider (the key then pays for them). Set a spend limit on
+  the Fireworks account; give each company its own key when that is not acceptable.
 - Non-admin endpoints (`GET /api/llm/provider`, `GET /api/llm/persona/{id}/providers`,
   `:907`, `:1052`) return `LLMProviderDescriptor` (`onyx/server/manage/llm/models.py:90-131`):
   id, name, provider type and models. No key, `api_base` or `custom_config`.
@@ -155,7 +165,7 @@ can change.
 - `ee/onyx/server/tenants/provisioning.py` stays under the Onyx Enterprise License
   (`backend/ee/LICENSE`, which covers the whole `ee/` directory); patch 0001 adds one
   import and one call. The terms for the use of `ee/` code are the same as for the
-  official image. Patch 0002 changes MIT files only. No Enterprise code moves into
+  official image. Patches 0002 and 0003 change MIT files only. No Enterprise code moves into
   Community paths.
 - License enforcement is not changed. The image keeps all upstream `ee/` code
   as upstream ships it, apart from the hunk above.

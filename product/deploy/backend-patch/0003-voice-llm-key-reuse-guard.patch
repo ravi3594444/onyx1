@@ -1,0 +1,36 @@
+22nd X AI: a voice provider may copy the API key of an LLM provider only for the same
+provider type and API base (multi-tenant mode). Upstream copies the key to any voice
+provider type and any target URI, so a company admin could send the stored platform key
+to another endpoint. The rule matches the LLM routes (0002 and upstream api_base check).
+Apply from the backend/ export root: patch -p1 --forward --batch --fuzz=0 < 0003-voice-llm-key-reuse-guard.patch
+
+--- a/onyx/server/manage/voice/api.py
++++ b/onyx/server/manage/voice/api.py
+@@ -33,6 +33,7 @@
+ from onyx.utils.url import SSRFException, validate_outbound_http_url
+ from onyx.voice.factory import get_voice_provider
+ from onyx.voice.interface import VoiceProviderInterface, normalize_provider_type
++from shared_configs.configs import MULTI_TENANT
+ 
+ logger = setup_logger()
+ 
+@@ -227,6 +228,19 @@
+                 OnyxErrorCode.VALIDATION_ERROR,
+                 "Selected LLM provider has no API key configured.",
+             )
++        # 22nd X AI: in multi-tenant mode the stored key may hold the platform key.
++        # Reuse it only for the same provider type and endpoint, as the LLM routes do.
++        requested_base = request.target_uri or request.api_base
++        if MULTI_TENANT and (
++            normalize_provider_type(llm_provider.provider)
++            != normalize_provider_type(request.provider_type)
++            or (requested_base or None) != (llm_provider.api_base or None)
++        ):
++            raise OnyxError(
++                OnyxErrorCode.VALIDATION_ERROR,
++                "The API key of an LLM provider can only be reused for the same "
++                "provider type and API base.",
++            )
+         api_key = llm_provider.api_key.get_value(apply_mask=False)
+         api_key_changed = True
+ 
