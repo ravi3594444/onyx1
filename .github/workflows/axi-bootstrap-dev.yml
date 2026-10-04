@@ -131,9 +131,7 @@ jobs:
                 exit 1
               fi
               name=model.env
-              content="$(printf 'MODEL_API_KEY=%q
-MODEL_API_BASE=%q
-' "${MODEL_API_KEY}" "${MODEL_API_BASE}")"
+              content="$(printf 'MODEL_API_KEY=%q\nMODEL_API_BASE=%q\n' "${MODEL_API_KEY}" "${MODEL_API_BASE}")"
               ;;
             smtp)
               if [[ -z "${SMTP_SERVER}" || -z "${EMAIL_FROM}" ]]; then
@@ -141,13 +139,7 @@ MODEL_API_BASE=%q
                 exit 1
               fi
               name=smtp.env
-              content="$(printf 'SMTP_SERVER=%q
-SMTP_PORT=%q
-SMTP_USER=%q
-SMTP_PASS=%q
-SMTP_STARTTLS=%q
-EMAIL_FROM=%q
-'                 "${SMTP_SERVER}" "${SMTP_PORT}" "${SMTP_USER}" "${SMTP_PASS}" "${SMTP_STARTTLS}" "${EMAIL_FROM}")"
+              content="$(printf 'SMTP_SERVER=%q\nSMTP_PORT=%q\nSMTP_USER=%q\nSMTP_PASS=%q\nSMTP_STARTTLS=%q\nEMAIL_FROM=%q\n'                 "${SMTP_SERVER}" "${SMTP_PORT}" "${SMTP_USER}" "${SMTP_PASS}" "${SMTP_STARTTLS}" "${EMAIL_FROM}")"
               ;;
           esac
           ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
