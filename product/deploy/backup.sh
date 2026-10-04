@@ -32,36 +32,49 @@ for volume in "${volumes[@]}"; do
   fi
 done
 
+# The fatal signals that the script catches. Nothing can catch SIGKILL.
+signals=(HUP INT TERM USR1 USR2 ALRM XCPU PIPE)
 stopped=0
+completed=0
 work_dir=""
 # Signals cannot stop the start. A failed start prints the manual command.
 start_stack() {
-  trap '' HUP INT TERM
+  trap '' "${signals[@]}"
   local status=0
   compose start || status=1
   stopped=0
   ((status == 0)) || echo "ERROR: the stack did not start. ${start_hint}" >&2
   return "${status}"
 }
-# Starts the stack again if this script stopped it, and removes a partial backup.
-# Errors and signals in here must not skip the start.
+# Runs once, at exit or on a signal. An exit before completion is a failure: the function
+# starts the stack again if this script stopped it, and removes the partial backup.
+# It ignores signals first, so that a second signal cannot skip the start.
 finish() {
-  local status=$?
+  trap '' "${signals[@]}"
+  trap - EXIT
+  local status="$1"
   set +e
-  trap '' HUP INT TERM PIPE
-  if ((stopped)); then
-    # If stderr is gone (a closed terminal), send the output to /dev/null so that it cannot stop the start.
-    echo "Backup failed. Starting the stack again." >&2 || exec >/dev/null 2>&1
-    start_stack || status=1
-  fi
-  if ((status != 0)) && [[ -n "${work_dir}" ]]; then
-    rm -rf "${work_dir}" || echo "Remove the partial backup ${work_dir}." >&2
+  if ((!completed)); then
+    status=1
+    if ((stopped)); then
+      # If stderr is gone (a closed terminal), send the output to /dev/null so that it cannot stop the start.
+      echo "Backup failed. Starting the stack again." >&2 || exec >/dev/null 2>&1
+      start_stack
+    fi
+    if [[ -n "${work_dir}" ]]; then
+      rm -rf "${work_dir}" || echo "Remove the partial backup ${work_dir}." >&2
+    fi
     echo "ERROR: backup failed. ${backup_dir} was not written." >&2
   fi
   exit "${status}"
 }
-trap finish EXIT
-trap 'exit 1' HUP INT TERM
+# The handler calls finish, not exit: an exit during the EXIT trap would skip the start.
+on_signal() {
+  trap '' "${signals[@]}"
+  finish 1
+}
+trap 'finish "$?"' EXIT
+trap on_signal "${signals[@]}"
 
 work_dir="$(mktemp -d "${backup_dir}.incomplete.XXXXXX")"
 install -m 600 "${compose_dir}/.env" "${work_dir}/env.backup"
@@ -75,20 +88,23 @@ for volume in "${volumes[@]}"; do
     >"${work_dir}/${volume}.tar.gz"
 done
 # A deploy or a second backup can start the stack during the copy. Then the copy is not consistent.
-running="$(compose ps -q)"
-if [[ -n "${running}" ]]; then
+# Use a file: a command substitution runs in a subshell without these traps.
+compose ps -q >"${work_dir}/running"
+if [[ -s "${work_dir}/running" ]]; then
   echo "ERROR: the stack ran during the copy. Make sure nothing starts it, then try again." >&2
   exit 1
 fi
+rm "${work_dir}/running"
 start_failed=0
 start_stack || start_failed=1
-trap 'exit 1' HUP INT TERM
+trap on_signal "${signals[@]}"
 downtime=$(($(date +%s) - started))
 
 # The copy is complete also if the start failed, because the stack was stopped.
 (cd "${work_dir}" && sha256sum ./*.tar.gz env.backup >SHA256SUMS)
 mv -T "${work_dir}" "${backup_dir}"
 work_dir=""
+completed=1
 echo "Backup in ${backup_dir}. Downtime: ${downtime} s."
 if ((start_failed)); then
   echo "ERROR: the backup is complete, but the stack is stopped. ${start_hint}" >&2

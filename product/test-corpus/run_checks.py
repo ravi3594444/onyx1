@@ -2,7 +2,7 @@
 
 Uses only the Python standard library and the public HTTP API (through nginx).
 Each step compares its results with the expected evidence in README.md, prints
-one PASS or FAIL line for each check, and exits with 1 if any check failed.
+one PASS, FAIL or SKIP line for each check, and exits with 1 if any check failed.
 
 Usage:
   python3 run_checks.py --base-url http://localhost:3000 --state state.json STEP
@@ -53,6 +53,66 @@ UPDATED_SUPPORT_HOURS = "Monday to Friday, 10:00 to 18:00 IST"
 WAIT_SECONDS = 900
 INDEX_FAILED_STATUSES = ("failed", "canceled", "completed_with_errors")
 FILE_END_STATUSES = ("COMPLETED", "SKIPPED", "FAILED", "CANCELED")
+# Q4: an answer that says that the documents do not hold the information.
+# Matched after normalise(), so "n't" covers "don't", "couldn't" and "wasn't".
+NO_INFO_PHRASES = (
+    "no information",
+    "no relevant",
+    "no document",
+    "no mention",
+    "no parental leave",
+    "nothing about",
+    "none of the",
+    "not find",
+    "n't find",
+    "cannot find",
+    "unable to find",
+    "not able to find",
+    "n't able to find",
+    "not found",
+    "not locate",
+    "n't locate",
+    "cannot locate",
+    "not see any",
+    "n't see any",
+    "not contain",
+    "n't contain",
+    "not include",
+    "n't include",
+    "not cover",
+    "n't cover",
+    "not mention",
+    "n't mention",
+    "not have information",
+    "n't have information",
+    "not have any information",
+    "n't have any information",
+    "not in the document",
+    "n't in the document",
+    "not in the provided",
+    "not in the available",
+    "not in the knowledge base",
+    "not available in",
+)
+# Q4: a leave length shows an invented policy. No document states one.
+LEAVE_LENGTH = r"\b\d+ ?-? ?(?:weeks?|months?)\b"
+# Q3: an answer that marks the 14-day rule as part of the replaced edition.
+REPLACED_PHRASES = (
+    "replaced",
+    "replaces",
+    "supersed",
+    "previous",
+    "prior",
+    "older",
+    "earlier",
+    "former",
+    "outdated",
+    "no longer",
+    "changed from",
+    "extended from",
+    "increased from",
+)
+OLD_REFUND_FACTS = ("14 day", "14-day", "fourteen day", "fourteen-day")
 
 
 @dataclass(frozen=True)
@@ -62,17 +122,31 @@ class Expected:
     cite: str | None = None
     facts: tuple[str, ...] = ()
     uncited: bool = False
+    # The answer states one of NO_INFO_PHRASES.
+    says_no_info: bool = False
+    # The answer comes from a search that returned public documents.
+    retrieves_public: bool = False
+    # Facts of a replaced edition. The answer states them only with REPLACED_PHRASES.
+    old_facts: tuple[str, ...] = ()
     forbidden_sources: tuple[str, ...] = (RESTRICTED_FILE,)
     forbidden_text: tuple[str, ...] = (RESTRICTED_MARKER,)
+    # Regular expressions that the normalised answer must not match.
+    forbidden_patterns: tuple[str, ...] = ()
 
 
 # Expected answers for users without access to the restricted file.
 ANSWERS = {
     "Q1": Expected(cite="expense-policy.md", facts=("1,500",)),
     "Q2": Expected(cite=GUIDE_FILE, facts=("monday", "saturday", "09:00 to 19:00")),
-    "Q3": Expected(cite=NEW_REFUND_FILE, facts=("30 days",)),
-    "Q4": Expected(uncited=True),
-    "Q5": Expected(forbidden_text=(RESTRICTED_MARKER, "38 to 46")),
+    "Q3": Expected(
+        cite=NEW_REFUND_FILE, facts=("30 days",), old_facts=OLD_REFUND_FACTS
+    ),
+    "Q4": Expected(
+        uncited=True, says_no_info=True, forbidden_patterns=(LEAVE_LENGTH,)
+    ),
+    "Q5": Expected(
+        retrieves_public=True, forbidden_text=(RESTRICTED_MARKER, "38 to 46")
+    ),
 }
 HR_Q5_ANSWER = Expected(
     cite=RESTRICTED_FILE, facts=("38 to 46",), forbidden_sources=(), forbidden_text=()
@@ -85,6 +159,7 @@ UPDATED_Q2_ANSWER = Expected(
 DELETED_Q3_ANSWER = Expected(
     cite=NEW_REFUND_FILE,
     facts=("30 days",),
+    old_facts=OLD_REFUND_FACTS,
     forbidden_sources=(RESTRICTED_FILE, OLD_REFUND_FILE),
 )
 
@@ -95,22 +170,30 @@ class Checks:
     def __init__(self) -> None:
         self.passed: list[str] = []
         self.failed: list[str] = []
+        self.skipped: list[str] = []
 
     def record(self, name: str, passed: bool, detail: Any = None) -> None:
         (self.passed if passed else self.failed).append(name)
         result = "PASS" if passed else "FAIL"
         print(f"{result} {name}: {json.dumps(detail, ensure_ascii=False)}", flush=True)
 
+    def skip(self, name: str, reason: str) -> None:
+        """Records a check that did not run. A skip does not fail the step."""
+        self.skipped.append(name)
+        print(f"SKIP {name}: {json.dumps(reason, ensure_ascii=False)}", flush=True)
+
     def exit_code(self, step: str) -> int:
         """Prints the step result. Returns 1 if a check failed or none ran."""
         total = len(self.passed) + len(self.failed)
+        skipped = f", {len(self.skipped)} skipped" if self.skipped else ""
         if self.failed or not total:
             failed = json.dumps(self.failed, ensure_ascii=False)
             print(
-                f"FAIL step {step}: {len(self.failed)} of {total} checks failed: {failed}"
+                f"FAIL step {step}: {len(self.failed)} of {total} checks failed"
+                f"{skipped}: {failed}"
             )
             return 1
-        print(f"PASS step {step}: {total} checks passed")
+        print(f"PASS step {step}: {total} checks passed{skipped}")
         return 0
 
 
@@ -239,8 +322,12 @@ def log(label: str, value: Any) -> None:
 
 
 def normalise(text: str) -> str:
-    """Lower-cases text, collapses whitespace and writes "38-46" as "38 to 46"."""
-    text = " ".join(text.lower().split())
+    """Lower-cases text, collapses whitespace and writes "38-46" as "38 to 46".
+
+    It also writes a curly apostrophe as a straight one.
+    """
+    text = text.lower().replace("\u2019", "'").replace("\u2018", "'")
+    text = " ".join(text.split())
     return re.sub(r"(?<=\d) ?[-\u2013\u2014] ?(?=\d)", " to ", text)
 
 
@@ -343,6 +430,35 @@ def search_contents(session: OnyxSession, query: str) -> str:
     return json.dumps(search_docs(session, query))
 
 
+def request_chat_session(
+    session: OnyxSession, description: str, project_id: int | None = None
+) -> tuple[int, Any]:
+    return session.request(
+        "POST",
+        "/api/chat/create-chat-session",
+        {"persona_id": 0, "description": description, "project_id": project_id},
+    )
+
+
+def create_chat_session(
+    session: OnyxSession, description: str, project_id: int | None = None
+) -> str:
+    status, created = request_chat_session(session, description, project_id)
+    expect(status == 200, f"create-chat-session returned {status}: {created}")
+    return str(created["chat_session_id"])
+
+
+def access_denied(status: int, body: Any) -> bool:
+    """True for a 403 "Access denied" or a 404 "not found" error body.
+
+    A 403 for a missing permission (for example READ_CHAT) has another detail.
+    """
+    detail = str(body.get("detail", "")).lower() if isinstance(body, dict) else ""
+    return (status == 403 and "access denied" in detail) or (
+        status == 404 and "not found" in detail
+    )
+
+
 def ask(
     session: OnyxSession,
     question: str,
@@ -353,22 +469,13 @@ def ask(
 
     Streaming keeps the nginx connection alive while a slow model works.
     """
-    status, created = session.request(
-        "POST",
-        "/api/chat/create-chat-session",
-        {
-            "persona_id": 0,
-            "description": question[:40],
-            "project_id": project_id,
-        },
-    )
-    expect(status == 200, f"create-chat-session returned {status}: {created}")
+    chat_session_id = create_chat_session(session, question[:40], project_id)
     started = time.time()
     packets = session.stream_lines(
         "/api/chat/send-chat-message",
         {
             "message": question,
-            "chat_session_id": created["chat_session_id"],
+            "chat_session_id": chat_session_id,
             "parent_message_id": -1,
             "file_descriptors": [],
             "forced_tool_id": forced_tool_id,
@@ -394,7 +501,7 @@ def ask(
         for doc in obj.get("documents") or obj.get("final_documents") or []:
             titles[doc["document_id"]] = doc["semantic_identifier"]
     return {
-        "chat_session_id": created["chat_session_id"],
+        "chat_session_id": chat_session_id,
         "seconds": round(time.time() - started, 1),
         "answer": "".join(answer_parts).strip(),
         "cited": sorted(titles.get(doc_id, doc_id) for doc_id in cited_ids),
@@ -419,6 +526,11 @@ def check_answer(
         if normalise(text) in answer
     ]
     problems += [
+        f"states {match.group()!r}"
+        for pattern in expected.forbidden_patterns
+        if (match := re.search(pattern, answer))
+    ]
+    problems += [
         f"retrieves or cites {source}"
         for source in expected.forbidden_sources
         if source in sources
@@ -427,6 +539,15 @@ def check_answer(
         problems.append(f"does not cite {expected.cite}")
     if expected.uncited and result["cited"]:
         problems.append("cites documents")
+    if expected.says_no_info and not any(
+        normalise(phrase) in answer for phrase in NO_INFO_PHRASES
+    ):
+        problems.append("does not say that the documents lack the information")
+    if expected.retrieves_public and not set(result["retrieved"]) & set(PUBLIC_FILES):
+        problems.append("retrieves no public document")
+    old_facts = [fact for fact in expected.old_facts if normalise(fact) in answer]
+    if old_facts and not any(normalise(p) in answer for p in REPLACED_PHRASES):
+        problems.append(f"states {old_facts[0]!r} but not that its edition is replaced")
     if result["error"] or not answer:
         problems.append("no answer")
     checks.record(name, not problems, {"problems": problems, **result})
@@ -557,8 +678,19 @@ def step_search(base_url: str, _state: dict[str, Any], checks: Checks) -> None:
                 "top_titles": titles[:4],
             },
         )
+    marker_query = f"{RESTRICTED_MARKER} salary band"
+    # Control: the owner finds the file, so its absence for others is evidence.
+    user_b = login(base_url, "USER_B")
+    docs = search_docs(user_b, marker_query)
+    titles = [doc["semantic_identifier"] for doc in docs]
+    marker_found = RESTRICTED_MARKER in json.dumps(docs)
+    checks.record(
+        f"search shows {RESTRICTED_FILE} to its owner {user_b.email}",
+        RESTRICTED_FILE in titles or marker_found,
+        {"marker_found": marker_found, "titles": titles},
+    )
     for session in (user_a, login(base_url, "ADMIN")):
-        docs = search_docs(session, f"{RESTRICTED_MARKER} salary band")
+        docs = search_docs(session, marker_query)
         titles = [doc["semantic_identifier"] for doc in docs]
         # Public results show that the search ran and returned documents.
         public_found = any(title in PUBLIC_FILES for title in titles)
@@ -591,13 +723,7 @@ def step_privacy(base_url: str, state: dict[str, Any], checks: Checks) -> None:
     user_b = login(base_url, "USER_B")
     if "user_b_chat_session" not in state:
         # Without the chat step (no model), test an empty session of user B.
-        status, created = user_b.request(
-            "POST",
-            "/api/chat/create-chat-session",
-            {"persona_id": 0, "description": "privacy check", "project_id": None},
-        )
-        expect(status == 200, f"create-chat-session returned {status}: {created}")
-        state["user_b_chat_session"] = created["chat_session_id"]
+        state["user_b_chat_session"] = create_chat_session(user_b, "privacy check")
     session_path = f"/api/chat/get-chat-session/{state['user_b_chat_session']}"
     file_ids = state["user_file_ids"]
     # Controls: user B can use the ids, so a denial for user A is evidence.
@@ -624,10 +750,24 @@ def step_privacy(base_url: str, state: dict[str, Any], checks: Checks) -> None:
     )
 
     user_a = login(base_url, "USER_A")
+    # Control: user A can read chat sessions, so a denial is about the owner.
+    # A failed create is a failed check, so the checks below still run.
+    status, data = request_chat_session(user_a, "privacy check")
+    created = status == 200 and isinstance(data, dict)
+    own_session = data.get("chat_session_id") if created else None
+    detail: dict[str, Any] = {"create_status": status, "body": data}
+    readable = False
+    if own_session:
+        status, data = user_a.request(
+            "GET", f"/api/chat/get-chat-session/{own_session}"
+        )
+        readable = status == 200
+        detail = {"status": status} if readable else {"status": status, "body": data}
+    checks.record("user A can read own chat session", readable, detail)
     status, data = user_a.request("GET", session_path)
     checks.record(
         "user A cannot read user B chat session",
-        status in (403, 404),
+        access_denied(status, data),
         {"status": status, "body": data},
     )
     status, data = user_a.request("GET", "/api/user/projects")
@@ -644,7 +784,7 @@ def step_privacy(base_url: str, state: dict[str, Any], checks: Checks) -> None:
         )
         checks.record(
             f"user A file status lookup hides user B file {file_id}",
-            status in (403, 404) or (status == 200 and data == []),
+            access_denied(status, data) or (status == 200 and data == []),
             {"status": status, "body": data},
         )
 
@@ -682,7 +822,7 @@ def step_update(base_url: str, state: dict[str, Any], checks: Checks) -> None:
         },
     )
     if SKIP_CHAT:
-        log("chat Q2 after update", "not run (--skip-chat)")
+        checks.skip("chat Q2 after update", "--skip-chat: no model answer")
         return
     check_answer(
         checks, "chat Q2 after update", ask(admin, QUESTIONS["Q2"]), UPDATED_Q2_ANSWER
@@ -722,7 +862,7 @@ def step_delete(base_url: str, state: dict[str, Any], checks: Checks) -> None:
         {"titles": titles},
     )
     if SKIP_CHAT:
-        log("chat Q3 after deletion", "not run (--skip-chat)")
+        checks.skip("chat Q3 after deletion", "--skip-chat: no model answer")
         return
     check_answer(
         checks,
@@ -741,15 +881,15 @@ def search_tool_id(session: OnyxSession) -> int:
 
 
 def step_chat_forced(base_url: str, _state: dict[str, Any], checks: Checks) -> None:
-    """Repeats Q1-Q4 with the Search tool forced, to separate retrieval from tool choice."""
+    """Repeats Q1-Q5 with the Search tool forced, to separate retrieval from tool choice."""
     user_a = login(base_url, "USER_A")
     tool_id = search_tool_id(user_a)
-    for key in ("Q1", "Q2", "Q3", "Q4"):
+    for key, expected in ANSWERS.items():
         check_answer(
             checks,
             f"chat {key} as {user_a.email} with search forced",
             ask(user_a, QUESTIONS[key], forced_tool_id=tool_id),
-            ANSWERS[key],
+            expected,
         )
 
 
@@ -775,7 +915,8 @@ def main() -> int:
     parser.add_argument(
         "--skip-chat",
         action="store_true",
-        help="skip the model answers in update and delete (no model provider)",
+        help="skip the model answers in update and delete (no model provider); "
+        "each one prints a SKIP line",
     )
     parser.add_argument("step", choices=list(STEPS))
     args = parser.parse_args()
