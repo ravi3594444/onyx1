@@ -20,7 +20,7 @@ health_timeout="${HTTPS_HEALTH_TIMEOUT:-300}"
 rsa_key_size=4096
 # Upstream init-letsencrypt.sh uses this subject for the dummy certificate.
 dummy_subject="/CN=localhost"
-tls_params_url="https://raw.githubusercontent.com/certbot/certbot/master"
+redirect_dir="$(dirname "${compose_dir}")/data/nginx-extra"
 failed=0
 
 pass() { echo "PASS: $*"; }
@@ -84,19 +84,20 @@ fi
 set_env_value COMPOSE_FILE "${compose_file}"
 pass ".env sets DOMAIN=${domain}, WEB_DOMAIN=https://${domain}, COMPOSE_FILE=${compose_file}."
 
-# --- 3. TLS parameters and certificate ---------------------------------------------------------
+# --- 3. TLS parameters, redirect block and certificate --------------------------------------------
 # The host user owns these folders, because it creates them before certbot runs.
-mkdir -p "${certbot_dir}/conf" "${certbot_dir}/www"
-for file in certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf \
-  certbot/certbot/ssl-dhparams.pem; do
-  name="$(basename "${file}")"
-  if [[ ! -s "${certbot_dir}/conf/${name}" ]]; then
-    curl -fsS --max-time 60 -o "${certbot_dir}/conf/${name}.tmp" "${tls_params_url}/${file}" ||
-      die "cannot download ${name}."
-    mv "${certbot_dir}/conf/${name}.tmp" "${certbot_dir}/conf/${name}"
-  fi
+mkdir -p "${certbot_dir}/conf" "${certbot_dir}/www" "${redirect_dir}"
+# The TLS parameters are copies from the certbot repository (product/deploy/tls/README.md).
+(cd "${script_dir}/tls" && sha256sum -c --quiet SHA256SUMS) || die "product/deploy/tls does not match SHA256SUMS."
+for name in options-ssl-nginx.conf ssl-dhparams.pem; do
+  cmp -s "${script_dir}/tls/${name}" "${certbot_dir}/conf/${name}" ||
+    install -m 644 "${script_dir}/tls/${name}" "${certbot_dir}/conf/${name}"
 done
 pass "options-ssl-nginx.conf and ssl-dhparams.pem are in ${certbot_dir}/conf."
+# Port 80 answers the ACME challenge and redirects everything else to HTTPS.
+sed "s/\${DOMAIN}/${domain}/g" "${script_dir}/nginx/redirect.conf.template" >"${redirect_dir}/redirect.conf.tmp"
+mv "${redirect_dir}/redirect.conf.tmp" "${redirect_dir}/redirect.conf"
+pass "redirect block for ${domain} is in ${redirect_dir}/redirect.conf."
 
 live="/etc/letsencrypt/live/${domain}"
 if in_certbot "test -s '${live}/fullchain.pem'" >/dev/null 2>&1; then
@@ -145,12 +146,11 @@ for path in /nginx-health /api/health; do
     fail "https://${domain}${path} does not answer 200."
   fi
 done
-# The upstream production template serves the app on port 80 too. It has no redirect.
+# The redirect block must send plain HTTP requests for the domain to HTTPS.
 http_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "http://${domain}/" || true)"
 case "${http_code}" in
 30[1278]) pass "http://${domain}/ redirects (${http_code})." ;;
-200) echo "INFO: http://${domain}/ answers 200 without a redirect (upstream app.conf.template.prod). Use the https URL." ;;
-*) fail "http://${domain}/ answers ${http_code}." ;;
+*) fail "http://${domain}/ answers ${http_code}; a 301 redirect to https was expected." ;;
 esac
 
 ((failed == 0)) || die "HTTPS setup is not complete."

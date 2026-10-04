@@ -1,0 +1,23 @@
+# Added by enable-https.sh next to the upstream template (RUNBOOK.md, section 3a).
+# nginx prefers the server block whose server_name matches the Host header over the
+# upstream default_server block. So requests for the domain on port 80 get this block:
+# the ACME challenge path stays reachable for certificate renewal, and everything else
+# redirects to HTTPS. Requests to 127.0.0.1 (the compose health check) still reach the
+# upstream block.
+server {
+    listen 80;
+    server_name ${DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location = /nginx-health {
+        access_log off;
+        return 200 "ok\n";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}

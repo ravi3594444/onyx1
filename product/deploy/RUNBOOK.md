@@ -98,17 +98,20 @@ The script does these steps and prints a `PASS` or `FAIL` line for each check:
    `DOMAIN=<domain>`, `WEB_DOMAIN=https://<domain>` and `COMPOSE_FILE`, which gets
    `compose.https.yml` as the last file (`docker-compose.yml:compose.override.yml:compose.https.yml`).
    It changes no other value.
-3. Downloads `options-ssl-nginx.conf` and `ssl-dhparams.pem` into `../data/certbot/conf`, as
-   the upstream `init-letsencrypt.sh` does. If no certificate exists, it writes a 1-day dummy
-   certificate (`CN=localhost`), so that nginx can start.
+3. Copies `options-ssl-nginx.conf` and `ssl-dhparams.pem` from `product/deploy/tls/` (pinned
+   copies from certbot v5.8.0, checked against `SHA256SUMS`) into `../data/certbot/conf`. It
+   renders `product/deploy/nginx/redirect.conf.template` into `../data/nginx-extra/`, which the
+   overlay mounts into nginx. If no certificate exists, it writes a 1-day dummy certificate
+   (`CN=localhost`), so that nginx can start.
 4. Runs `docker compose up -d`. This recreates nginx with the production template and starts
    `certbot`. Then it waits for `http://localhost/nginx-health`.
 5. If the certificate is the dummy, it removes it and runs `certbot certonly --webroot`. Then
    it reloads nginx.
-6. Checks `https://<domain>/nginx-health` and `https://<domain>/api/health`. The upstream
-   template does not redirect HTTP to HTTPS: `http://<domain>/` also serves the app. The script
-   reports this as `INFO`. Give users the `https://` URL; `WEB_DOMAIN` makes the app build
-   its own links with `https://`.
+6. Checks `https://<domain>/nginx-health` and `https://<domain>/api/health`, and that
+   `http://<domain>/` answers a 301 to HTTPS. The redirect block serves only the ACME challenge
+   path and the health check on port 80 for the domain. `WEB_DOMAIN` makes the app build its
+   own links with `https://`. An HSTS header needs a change to the upstream 443 server block,
+   so it is not set.
 
 Renewal: the `certbot` service runs `certbot renew` every 12 hours. `run-nginx.sh` reloads
 nginx every 6 hours, so nginx uses a new certificate without a restart. Check with

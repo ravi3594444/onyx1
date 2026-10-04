@@ -16,6 +16,8 @@ services:
     volumes:
       - ../data/certbot/conf:/etc/letsencrypt
       - ../data/certbot/www:/var/www/certbot
+      # Rendered by enable-https.sh from product/deploy/nginx/redirect.conf.template.
+      - ../data/nginx-extra/redirect.conf:/etc/nginx/conf.d/zz-redirect.conf:ro
     # Same command as upstream, with the production template.
     command: >
       /bin/sh -c "rm -f /etc/nginx/conf.d/default.conf
