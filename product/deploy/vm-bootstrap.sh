@@ -23,8 +23,10 @@ readonly COMPOSE_DIR="${ONYX_DEPLOY_DIR}/deployment/docker_compose"
 readonly RESTORE_COMPOSE_DIR="${ONYX_RESTORE_DIR}/deployment/docker_compose"
 readonly FORK_URL=https://github.com/ravi3594444/onyx1
 readonly UPSTREAM_URL=https://github.com/onyx-dot-app/onyx
-# set_live_url reads .env: the public HTTPS URL with the HTTPS overlay, else HOST_PORT.
+# set_live_url reads .env: port 80 with the HTTPS overlay, else HOST_PORT. PUBLIC_URL is
+# the HTTPS URL of the stack when the overlay is active, else empty.
 LIVE_URL=http://localhost:3000
+PUBLIC_URL=""
 readonly RESTORE_URL=http://localhost:3100
 readonly RESTORE_PROJECT=onyx-restore
 readonly HEALTH_TIMEOUT=900
@@ -140,18 +142,55 @@ http_code() {
   curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@" || true
 }
 
-# Waits until <url>/api/health answers 200.
+# Waits until <url>/api/health answers 200. On a timeout it prints what curl saw.
 wait_health() {
   local base_url="$1" timeout="${2:-${HEALTH_TIMEOUT}}" deadline
   deadline=$((SECONDS + timeout))
   until [[ "$(http_code "${base_url}/api/health")" == 200 ]]; do
     ((SECONDS < deadline)) || {
       echo "ERROR: ${base_url}/api/health is not healthy after ${timeout} s." >&2
+      curl_diagnostics "${base_url}/api/health"
       return 1
     }
     sleep 10
   done
   echo "${base_url}/api/health answers 200."
+}
+
+# Prints the HTTP code, the TLS result and the last lines of a verbose curl of <url>.
+curl_diagnostics() {
+  local url="$1"
+  echo "-- curl ${url}"
+  curl -sS -o /dev/null -w 'http_code=%{http_code} ssl_verify_result=%{ssl_verify_result} remote_ip=%{remote_ip} time_total=%{time_total}\n' \
+    --max-time 20 -v "${url}" 2>&1 | grep -v '^[{}] \[' | tail -n 25 || true
+  if [[ ${#DOCKER_CMD[@]} -gt 0 && -f "${COMPOSE_DIR}/.env" ]]; then
+    live_compose ps --format '{{.Name}} {{.Status}} {{.Ports}}' 2>&1 || true
+    live_compose logs --tail 20 nginx 2>&1 || true
+  fi
+}
+
+# Records whether the public HTTPS URL answers, with a trusted certificate, like a user sees it.
+check_public_url() {
+  local deadline code
+  [[ -n "${PUBLIC_URL}" ]] || { echo "No HTTPS overlay in .env: no public URL to check."; return 0; }
+  deadline=$((SECONDS + 60))
+  while :; do
+    code="$(http_code "${PUBLIC_URL}/api/health")"
+    [[ "${code}" == 200 ]] && break
+    ((SECONDS < deadline)) || {
+      echo "ERROR: ${PUBLIC_URL}/api/health answers ${code}, not 200." >&2
+      curl_diagnostics "${PUBLIC_URL}/api/health"
+      return 1
+    }
+    sleep 5
+  done
+  echo "${PUBLIC_URL}/api/health answers 200."
+  echo "-- certificate"
+  echo | openssl s_client -connect "${DNS_NAME}:443" -servername "${DNS_NAME}" 2>/dev/null |
+    openssl x509 -noout -issuer -subject -enddate 2>&1 || true
+  code="$(http_code "http://${DNS_NAME}/")"
+  [[ "${code}" =~ ^30[1278]$ ]] || { echo "ERROR: http://${DNS_NAME}/ answers ${code}, not a redirect." >&2; return 1; }
+  echo "http://${DNS_NAME}/ redirects (${code})."
 }
 
 # ---------------------------------------------------------------- inspect
@@ -316,8 +355,9 @@ export_release_files() {
 # With compose.https.yml in COMPOSE_FILE, nginx publishes only ports 80 and 443.
 set_live_url() {
   if [[ "$(live_env_value COMPOSE_FILE "")" == *compose.https.yml* ]]; then
-    # The checks then use the public URL, with a trusted certificate, like a user does.
-    LIVE_URL="https://${DNS_NAME}"
+    # The checks run over loopback. check_public_url records the public HTTPS URL apart.
+    LIVE_URL=http://localhost
+    PUBLIC_URL="https://${DNS_NAME}"
   else
     LIVE_URL="http://localhost:$(live_env_value HOST_PORT 3000)"
   fi
@@ -400,6 +440,7 @@ verify() {
   admin_login "${LIVE_URL}" "${work_dir}/admin.jar"
   check_admin_capabilities
 
+  run_step public-url check_public_url
   run_step cleanup cleanup_previous_runs
 
   local checks="${ONYX_SRC_DIR}/product/test-corpus/run_checks.py"
@@ -693,6 +734,7 @@ restart_stack() {
   run_step down live_compose down
   run_step up live_compose up -d
   run_step health wait_health "${LIVE_URL}"
+  run_step public-url check_public_url
   show "containers after" live_compose ps --format '{{.Name}} {{.ID}} {{.Status}}'
   volumes_after="$(dk volume ls -q --filter label=com.docker.compose.project=onyx | sort)"
   echo "volumes: ${volumes_after//$'\n'/ }"
