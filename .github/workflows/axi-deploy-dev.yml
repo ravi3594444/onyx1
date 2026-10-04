@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     # Image pull, then up to 15 minutes for the health check.
     timeout-minutes: 60
-    environment: development
+    environment: ci-protected
     permissions:
       contents: read
       # Reads the product check runs for a manual deploy.
