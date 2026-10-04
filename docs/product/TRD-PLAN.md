@@ -301,6 +301,7 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | 16 | owner | `d2561f1` | PASS: `ravi80847949@gmail.com` had an account with basic permissions; the supported admin API granted admin access, read back as `is_admin: true`. 4 accounts, 2 admins, 0 pending invitations (`...vm-owner-run16.txt`). |
 | 17 | https | `d5a6f09` | HTTPS 200 with the real check, but `http://` answered 200: nginx still ran with its old command. Fixed in `49f3973` (force-recreate nginx). |
 | 18 | owner | `d5a6f09` | PASS: invite-only sign-up on (`invite_only_enabled` false to true), owner already admin (`...vm-owner-run18.txt`). |
+| 20 | restart | `49f3973` | PASS, all steps: `down`, `up -d`, health, `public-url`, volumes kept, `search` 8 of 8, `privacy` 7 of 7 (`...vm-restart-run20.txt`). |
 | 19 | https | `49f3973` | PASS: redirect block on `172.18.0.12:80` only; `https://<domain>/api/health` and `/nginx-health` 200 (Let's Encrypt production, `CN=YE1`); `http://<domain>/` 301 (`...vm-https-run19.txt`). |
 
 ### Results on the VM (run 9, commit `6fdf922`)
@@ -316,7 +317,7 @@ The VM also keeps a copy of each run in `/srv/onyx/evidence/<time>/`.
 | Pruning race | Reproduced: a file removed during a running prune stays in search after 60 s and no second prune starts. The supported manual prune (`POST .../cc-pair/<id>/prune`) removes it in about 20 s. 6 of 6 checks PASS. The race itself is Onyx behaviour and stays open; the workaround is in RUNBOOK section 7a. |
 | Backup | PASS. 87 s downtime, SHA256SUMS verified by the restore. |
 | Isolated restore | PASS. Port 3100 healthy in about 50 s; `search` 8 of 8 and `privacy` 7 of 7 on the copy; live stack started again afterwards. |
-| Restart | PASS (run 10). `docker compose down` then `up -d`: all containers recreated in about 2 minutes, the 10 named volumes unchanged, indexed documents and access rules intact (`search` 8 of 8, `privacy` 7 of 7). Sessions live in Redis and end with a restart. |
+| Restart | PASS (runs 10 and 20). `docker compose down` then `up -d`: all containers recreated in about 2 minutes, the 10 named volumes unchanged, indexed documents and access rules intact (`search` 8 of 8, `privacy` 7 of 7), public HTTPS URL back with 200. Sessions live in Redis and end with a restart. |
 | Public HTTPS URL | PASS (run 19). Trusted certificate, 200 over HTTPS, 301 from plain HTTP. The certbot service renews every 12 h; nginx reloads every 6 h. |
 | Chat and citations | BLOCKED: no model provider credentials. |
 | Branding | BLOCKED: no Business license. License enforcement stays on. |
