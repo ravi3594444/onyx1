@@ -1,0 +1,293 @@
+# Bootstrap dev VM run 20 (restart), commit 49f39737ec311cb7814ac7240f714e7a36c343c5, GitHub Actions job 111456793685
+# https://github.com/ravi3594444/onyx1/actions/runs/37209224551
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  restart) args="restart ${GITHUB_SHA}" ;;
+  https | https-staging)
+    # The value goes into the remote command line, so allow only a plain address.
+    if [[ ! "${LETSENCRYPT_EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+      echo "::error::Give letsencrypt_email for the ${BOOTSTRAP_ACTION} action."
+      exit 1
+    fi
+    args="https ${GITHUB_SHA} ${LETSENCRYPT_EMAIL}"
+    [[ "${BOOTSTRAP_ACTION}" == https-staging ]] && args+=" staging"
+    ;;
+  owner)
+    email_re='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+    if [[ ! "${OWNER_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::owner_email is not a plain email address."; exit 1
+    fi
+    if [[ -n "${INVITE_EMAIL}" && ! "${INVITE_EMAIL}" =~ ${email_re} ]]; then
+      echo "::error::invite_email is not a plain email address."; exit 1
+    fi
+    args="owner ${GITHUB_SHA} ${OWNER_EMAIL} ${INVITE_EMAIL:--} ${INVITE_ONLY}"
+    ;;
+  model)
+    if [[ ! "${MODEL_PROVIDER}" =~ ^[a-z0-9_]+$ || ! "${MODEL_NAME}" =~ ^[A-Za-z0-9._/:-]+$ ]]; then
+      echo "::error::model_provider or model_name has characters that are not allowed."; exit 1
+    fi
+    args="model ${GITHUB_SHA} ${MODEL_PROVIDER} ${MODEL_NAME}"
+    ;;
+  smtp) args="smtp ${GITHUB_SHA}" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: restart
+  WEB_DOMAIN: https://my-knowledge.duckdns.org
+  LETSENCRYPT_EMAIL:
+  OWNER_EMAIL: ravi80847949@gmail.com
+  INVITE_EMAIL:
+  INVITE_ONLY: keep
+  MODEL_PROVIDER: fireworks_ai
+  MODEL_NAME: list
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T142559Z-restart
+
+== vm-bootstrap restart 49f39737ec311cb7814ac7240f714e7a36c343c5 2026-10-04T14:25:59Z ==
+State of the last verify: /srv/onyx/evidence/20261004T135252Z-restart/state.json
+https://my-knowledge.duckdns.org/api/health answers 200.
+
+== source at 49f39737ec311cb7814ac7240f714e7a36c343c5 ==
+49f39737ec311cb7814ac7240f714e7a36c343c5 2026-10-04T14:23:20+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': recreate nginx in enable-https.sh
+
+== containers before ==
+onyx-api_server-1 be8e0ddf9ebc Up 32 minutes (healthy)
+onyx-background-1 d205205671ee Up 32 minutes
+onyx-cache-1 ed8d640ed51c Up 32 minutes
+onyx-certbot-1 8064e00502d0 Up 32 minutes
+onyx-indexing_model_server-1 3ec929a78214 Up 32 minutes (healthy)
+onyx-inference_model_server-1 3503f0c74dd8 Up 32 minutes (healthy)
+onyx-minio-1 8399c459d1a5 Up 32 minutes (healthy)
+onyx-nginx-1 176ad0fc4322 Up 2 minutes (healthy)
+onyx-opensearch-1 b79fa7c2a8cf Up 32 minutes
+onyx-relational_db-1 46383f5db970 Up 32 minutes (healthy)
+onyx-web_server-1 dfa635ef6895 Up 32 minutes (healthy)
+
+== step down ==
+ Container onyx-background-1 Stopping
+ Container onyx-nginx-1 Stopping
+ Container onyx-certbot-1 Stopping
+ Container onyx-certbot-1 Stopped
+ Container onyx-certbot-1 Removing
+ Container onyx-certbot-1 Removed
+ Container onyx-nginx-1 Stopped
+ Container onyx-nginx-1 Removing
+ Container onyx-nginx-1 Removed
+ Container onyx-web_server-1 Stopping
+ Container onyx-background-1 Stopped
+ Container onyx-background-1 Removing
+ Container onyx-web_server-1 Stopped
+ Container onyx-web_server-1 Removing
+ Container onyx-background-1 Removed
+ Container onyx-indexing_model_server-1 Stopping
+ Container onyx-web_server-1 Removed
+ Container onyx-api_server-1 Stopping
+ Container onyx-indexing_model_server-1 Stopped
+ Container onyx-indexing_model_server-1 Removing
+ Container onyx-indexing_model_server-1 Removed
+ Container onyx-api_server-1 Stopped
+ Container onyx-api_server-1 Removing
+ Container onyx-api_server-1 Removed
+ Container onyx-opensearch-1 Stopping
+ Container onyx-relational_db-1 Stopping
+ Container onyx-minio-1 Stopping
+ Container onyx-cache-1 Stopping
+ Container onyx-inference_model_server-1 Stopping
+ Container onyx-relational_db-1 Stopped
+ Container onyx-relational_db-1 Removing
+ Container onyx-minio-1 Stopped
+ Container onyx-minio-1 Removing
+ Container onyx-relational_db-1 Removed
+ Container onyx-minio-1 Removed
+ Container onyx-cache-1 Stopped
+ Container onyx-cache-1 Removing
+ Container onyx-cache-1 Removed
+ Container onyx-opensearch-1 Stopped
+ Container onyx-opensearch-1 Removing
+ Container onyx-opensearch-1 Removed
+ Container onyx-inference_model_server-1 Stopped
+ Container onyx-inference_model_server-1 Removing
+ Container onyx-inference_model_server-1 Removed
+ Network onyx_default Removing
+ Network onyx_default Removed
+-- step down: exit 0
+
+== step up ==
+ Network onyx_default Creating
+ Network onyx_default Creating
+ Network onyx_default Created
+ Network onyx_default Created
+ Container onyx-inference_model_server-1 Creating
+ Container onyx-relational_db-1 Creating
+ Container onyx-certbot-1 Creating
+ Container onyx-indexing_model_server-1 Creating
+ Container onyx-opensearch-1 Creating
+ Container onyx-minio-1 Creating
+ Container onyx-cache-1 Creating
+ Container onyx-opensearch-1 Created
+ Container onyx-certbot-1 Created
+ Container onyx-relational_db-1 Created
+ Container onyx-minio-1 Created
+ Container onyx-cache-1 Created
+ Container onyx-indexing_model_server-1 Created
+ Container onyx-inference_model_server-1 Created
+ Container onyx-api_server-1 Creating
+ Container onyx-background-1 Creating
+ Container onyx-background-1 Created
+ Container onyx-api_server-1 Created
+ Container onyx-web_server-1 Creating
+ Container onyx-web_server-1 Created
+ Container onyx-nginx-1 Creating
+ Container onyx-nginx-1 Created
+ Container onyx-indexing_model_server-1 Starting
+ Container onyx-inference_model_server-1 Starting
+ Container onyx-minio-1 Starting
+ Container onyx-cache-1 Starting
+ Container onyx-opensearch-1 Starting
+ Container onyx-certbot-1 Starting
+ Container onyx-relational_db-1 Starting
+ Container onyx-indexing_model_server-1 Started
+ Container onyx-inference_model_server-1 Started
+ Container onyx-minio-1 Started
+ Container onyx-cache-1 Started
+ Container onyx-opensearch-1 Started
+ Container onyx-certbot-1 Started
+ Container onyx-relational_db-1 Started
+ Container onyx-background-1 Starting
+ Container onyx-api_server-1 Starting
+ Container onyx-background-1 Started
+ Container onyx-api_server-1 Started
+ Container onyx-web_server-1 Starting
+ Container onyx-web_server-1 Started
+ Container onyx-web_server-1 Waiting
+ Container onyx-api_server-1 Waiting
+ Container onyx-web_server-1 Healthy
+ Container onyx-api_server-1 Healthy
+ Container onyx-nginx-1 Starting
+ Container onyx-nginx-1 Started
+-- step up: exit 0
+
+== step health ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+-- step health: exit 0
+
+== step public-url ==
+https://my-knowledge.duckdns.org/api/health answers 200.
+-- certificate
+issuer=C = US, O = Let's Encrypt, CN = YE1
+subject=CN = my-knowledge.duckdns.org
+notAfter=Jan  2 11:55:30 2027 GMT
+http://my-knowledge.duckdns.org/ redirects (301).
+-- step public-url: exit 0
+
+== containers after ==
+onyx-api_server-1 2fbdcba2f2c5 Up About a minute (healthy)
+onyx-background-1 c57575ce3e76 Up About a minute
+onyx-cache-1 29d3634f8290 Up About a minute
+onyx-certbot-1 2cfe5dc8865b Up About a minute
+onyx-indexing_model_server-1 1c336c4e1023 Up About a minute (healthy)
+onyx-inference_model_server-1 0590ace88548 Up About a minute (healthy)
+onyx-minio-1 60c253f6c544 Up About a minute (healthy)
+onyx-nginx-1 7592f2bf463a Up Less than a second (health: starting)
+onyx-opensearch-1 6ccdb655e49a Up About a minute
+onyx-relational_db-1 20dc25492cd3 Up About a minute (healthy)
+onyx-web_server-1 c81c5ef265cd Up 59 seconds (healthy)
+volumes: onyx_api_server_logs onyx_background_logs onyx_db_volume onyx_file-system onyx_indexing_huggingface_model_cache onyx_indexing_model_server_logs onyx_inference_model_server_logs onyx_minio_data onyx_model_cache_huggingface onyx_opensearch-data
+
+== step volumes-kept ==
+-- step volumes-kept: exit 0
+
+== step search ==
+PASS search Q1 as user-a@example.com: {"expected_top": "expense-policy.md", "seconds": 15.33, "top_titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md"]}
+PASS search Q2 as user-a@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.25, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search Q3 as user-a@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.23, "top_titles": ["refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q4 as user-a@example.com: {"expected_top": null, "seconds": 0.21, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "refund-policy-2026.md", "expense-policy.md"]}
+PASS search Q5 as user-a@example.com: {"expected_top": null, "seconds": 0.23, "top_titles": ["expense-policy.md", "expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner user-b@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "hr-salary-bands-restricted.md", "expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from user-a@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+-- step search: exit 0
+
+== step privacy ==
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 2, "name": "HR private", "description": null, "created_at": "2026-10-04T13:41:17.541351Z", "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "instructions": null, "chat_sessions": []}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "575f4732-adf3-4e9c-9a45-0374c7cae681", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "file_id": "aade0437-5c1e-4093-b5a9-1086858cf4fa", "created_at": "2026-10-04T13:41:17.908559", "status": "COMPLETED", "last_accessed_at": "2026-10-04T13:41:17.906268Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 0, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file 575f4732-adf3-4e9c-9a45-0374c7cae681: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+-- step privacy: exit 0
+
+== docker stats ==
+CONTAINER ID   NAME                            CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O         PIDS
+7592f2bf463a   onyx-nginx-1                    0.00%     7.727MiB / 15.61GiB   0.05%     141kB / 248kB     0B / 65.5kB       10
+c81c5ef265cd   onyx-web_server-1               0.00%     87.23MiB / 15.61GiB   0.55%     2.85kB / 1.11kB   11.9MB / 0B       11
+2fbdcba2f2c5   onyx-api_server-1               0.20%     629.5MiB / 15.61GiB   3.94%     545kB / 872kB     78.4MB / 98.7MB   10
+c57575ce3e76   onyx-background-1               1.73%     1.847GiB / 15.61GiB   11.83%    1.04MB / 783kB    22.4MB / 74.2MB   65
+1c336c4e1023   onyx-indexing_model_server-1    0.21%     345.4MiB / 15.61GiB   2.16%     3.17kB / 126B     13.7MB / 28.9MB   9
+29d3634f8290   onyx-cache-1                    0.65%     5.422MiB / 15.61GiB   0.03%     598kB / 852kB     1.25MB / 0B       6
+0590ace88548   onyx-inference_model_server-1   0.20%     665.4MiB / 15.61GiB   4.16%     170kB / 107kB     12MB / 48.3MB     20
+60c253f6c544   onyx-minio-1                    0.00%     216MiB / 15.61GiB     1.35%     9.95kB / 5.32kB   38.9MB / 77.8kB   11
+20dc25492cd3   onyx-relational_db-1            3.95%     144.5MiB / 15.61GiB   0.90%     749kB / 449kB     6.03MB / 471kB    60
+2cfe5dc8865b   onyx-certbot-1                  0.00%     4.207MiB / 15.61GiB   0.03%     2.57kB / 126B     2.13MB / 4.07MB   2
+6ccdb655e49a   onyx-opensearch-1               2.94%     2.58GiB / 15.61GiB    16.52%    202kB / 140kB     145MB / 15.4MB    94
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989        7007        4971          24        4011        8462
+Swap:              0           0           0
+
+== summary ==
+step             exit code
+down             0
+up               0
+health           0
+public-url       0
+volumes-kept     0
+search           0
+privacy          0
+RESULT: PASS (all steps exited with 0)
