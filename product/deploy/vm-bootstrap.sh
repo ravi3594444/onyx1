@@ -5,6 +5,9 @@
 #        vm-bootstrap.sh verify <full commit SHA> [with-chat]
 #        vm-bootstrap.sh restart <full commit SHA>
 #        vm-bootstrap.sh https <full commit SHA> <email> [staging]
+#        vm-bootstrap.sh owner <full commit SHA> <owner email> <invite email|-> <keep|on|off>
+#        vm-bootstrap.sh model <full commit SHA> <litellm provider> <model id|list>
+#        vm-bootstrap.sh smtp <full commit SHA>
 # Layout on the VM: /srv/onyx-src (clone of the fork), /srv/onyx (release files, .env,
 # evidence), /srv/backups. See product/deploy/RUNBOOK.md.
 # The script never creates a second .env, never removes the live volumes and never
@@ -19,6 +22,8 @@ readonly ONYX_RESTORE_DIR="${SRV_ROOT}/onyx-restore"
 readonly BACKUP_ROOT="${SRV_ROOT}/backups"
 readonly EVIDENCE_ROOT="${ONYX_DEPLOY_DIR}/evidence"
 readonly USERS_FILE="${ONYX_DEPLOY_DIR}/test-users.env"
+# The workflow writes model.env and smtp.env here (mode 600) from the environment secrets.
+readonly SECRETS_DIR="${ONYX_DEPLOY_DIR}/secrets"
 readonly COMPOSE_DIR="${ONYX_DEPLOY_DIR}/deployment/docker_compose"
 readonly RESTORE_COMPOSE_DIR="${ONYX_RESTORE_DIR}/deployment/docker_compose"
 readonly FORK_URL=https://github.com/ravi3594444/onyx1
@@ -56,7 +61,10 @@ main() {
     verify) verify_wrapper "$@" ;;
     restart) restart_wrapper "$@" ;;
     https) enable_https "$@" ;;
-    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging]" ;;
+    owner) owner_wrapper "$@" ;;
+    model) model_wrapper "$@" ;;
+    smtp) smtp_setup "$@" ;;
+    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha>" ;;
   esac
 }
 
@@ -773,6 +781,134 @@ enable_https() {
   wait_health "${LIVE_URL}"
   show "docker compose ps" live_compose ps
   section "https complete: https://${DNS_NAME}"
+}
+
+
+# ---------------------------------------------------------------- owner, model, smtp
+
+is_email() {
+  [[ "$1" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]
+}
+
+# Shared start of the actions that talk to the live API as the admin test user.
+live_action_start() {
+  local sha="$1"
+  [[ -f "${COMPOSE_DIR}/.env" ]] || die "${COMPOSE_DIR}/.env is missing. Run the install action first."
+  [[ -f "${USERS_FILE}" ]] || die "${USERS_FILE} is missing. Run the verify action first."
+  set_live_url
+  wait_health "${LIVE_URL}" 60 || die "The live stack is not healthy."
+  checkout_source "${sha}"
+  # shellcheck disable=SC1090
+  source "${USERS_FILE}"
+  export ADMIN_EMAIL ADMIN_PASSWORD
+}
+
+# Runs <function> with its arguments and keeps a copy of the output in the evidence folder.
+with_evidence() {
+  local label="$1" evidence code=0
+  shift
+  mkdir -p "${EVIDENCE_ROOT}"
+  evidence="${EVIDENCE_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)-${label}"
+  mkdir -p "${evidence}"
+  echo "Evidence folder: ${evidence}"
+  "$@" 2>&1 | tee "${evidence}/${label}.log" || code=$?
+  return "${code}"
+}
+
+owner_wrapper() {
+  local sha="${1:-}" owner="${2:-}" invite="${3:--}" invite_only="${4:-keep}"
+  check_sha "${sha}"
+  is_email "${owner}" || die "Give the owner email."
+  [[ "${invite}" == - ]] || is_email "${invite}" || die "Give an invite email, or - for none."
+  [[ "${invite_only}" =~ ^(keep|on|off)$ ]] || die "The invite-only argument must be keep, on or off."
+  with_evidence owner owner_admin "${sha}" "${owner}" "${invite}" "${invite_only}"
+}
+
+# Grants the owner the admin access, invites a member and sets invite-only sign-up.
+owner_admin() {
+  local sha="$1" owner="$2" invite="$3" invite_only="$4"
+  local -a args
+  section "vm-bootstrap owner ${owner} ${sha} $(date -u +%FT%TZ)"
+  live_action_start "${sha}"
+  args=(--base-url "${LIVE_URL}" --owner "${owner}" --list)
+  [[ "${invite}" == - ]] || args+=(--invite "${invite}")
+  [[ "${invite_only}" == keep ]] || args+=(--invite-only "${invite_only}")
+  python3 "${ONYX_SRC_DIR}/product/deploy/owner-admin.py" "${args[@]}"
+}
+
+model_wrapper() {
+  local sha="${1:-}" provider="${2:-fireworks_ai}" model="${3:-list}"
+  check_sha "${sha}"
+  [[ "${provider}" =~ ^[a-z0-9_]+$ ]] || die "Give the LiteLLM provider name, for example fireworks_ai."
+  [[ "${model}" =~ ^[A-Za-z0-9._/:-]+$ ]] || die "Give the model id, or list to show the matching models."
+  with_evidence model configure_model "${sha}" "${provider}" "${model}"
+}
+
+# Configures the hosted model through the admin API. The key stays in model.env.
+configure_model() {
+  local sha="$1" provider="$2" model="$3"
+  section "vm-bootstrap model ${provider} ${model} ${sha} $(date -u +%FT%TZ)"
+  [[ -f "${SECRETS_DIR}/model.env" ]] ||
+    die "${SECRETS_DIR}/model.env is missing. The workflow writes it from the secret MODEL_API_KEY."
+  # shellcheck disable=SC1090,SC1091
+  source "${SECRETS_DIR}/model.env"
+  [[ -n "${MODEL_API_KEY:-}" ]] || die "MODEL_API_KEY is empty in ${SECRETS_DIR}/model.env."
+  export MODEL_API_KEY MODEL_API_BASE="${MODEL_API_BASE:-}" MODEL_PROVIDER="${provider}" MODEL_NAME="${model}"
+  if [[ "${model}" == list ]]; then
+    checkout_source "${sha}"
+    python3 "${ONYX_SRC_DIR}/product/deploy/configure-model.py" --check-key-only
+    return
+  fi
+  live_action_start "${sha}"
+  python3 "${ONYX_SRC_DIR}/product/deploy/configure-model.py" --base-url "${LIVE_URL}"
+}
+
+# Writes the SMTP values from smtp.env into .env and recreates the services that read them.
+smtp_setup() {
+  local sha="${1:-}" key
+  check_sha "${sha}"
+  section "vm-bootstrap smtp ${sha} $(date -u +%FT%TZ)"
+  docker info >/dev/null 2>&1 || die "docker does not work without sudo. Run the install action first."
+  docker_setup
+  [[ -f "${COMPOSE_DIR}/.env" ]] || die "${COMPOSE_DIR}/.env is missing. Run the install action first."
+  [[ -f "${SECRETS_DIR}/smtp.env" ]] ||
+    die "${SECRETS_DIR}/smtp.env is missing. The workflow writes it from the SMTP_* secrets."
+  checkout_source "${sha}"
+  # shellcheck disable=SC1090,SC1091
+  source "${SECRETS_DIR}/smtp.env"
+  # Onyx sends email when SMTP_SERVER and EMAIL_FROM are set (EMAIL_CONFIGURED).
+  [[ -n "${SMTP_SERVER:-}" && -n "${EMAIL_FROM:-}" ]] || die "SMTP_SERVER and EMAIL_FROM are needed."
+  for key in SMTP_SERVER SMTP_PORT SMTP_USER SMTP_PASS SMTP_STARTTLS EMAIL_FROM; do
+    [[ -n "${!key:-}" ]] || continue
+    set_env_key "${key}" "${!key}"
+  done
+  set_env_key ENABLE_EMAIL_INVITES true
+  echo "Set in .env (values not shown): SMTP_SERVER SMTP_PORT SMTP_USER SMTP_PASS SMTP_STARTTLS EMAIL_FROM, and ENABLE_EMAIL_INVITES=true."
+  section "docker compose up -d: api_server and background read the new values"
+  live_compose up -d
+  set_live_url
+  wait_health "${LIVE_URL}"
+}
+
+# Sets one key in .env: replaces the line, also a commented one, or appends it. The value
+# goes through the environment, so quotes, & and | in a password are safe.
+set_env_key() {
+  ENV_KEY="$1" ENV_VALUE="$2" python3 - "${COMPOSE_DIR}/.env" <<'PY'
+import os, re, sys
+path, key, value = sys.argv[1], os.environ["ENV_KEY"], os.environ["ENV_VALUE"]
+if any(c in value for c in " #$'\"\\"):
+    value = "'" + value + "'" if "'" not in value else '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$") + '"'
+lines = open(path).read().splitlines()
+pattern = re.compile(rf"^#? ?{re.escape(key)}=")
+for i, line in enumerate(lines):
+    if pattern.match(line):
+        lines[i] = f"{key}={value}"
+        break
+else:
+    lines.append(f"{key}={value}")
+with open(path, "w") as handle:
+    handle.write("\n".join(lines) + "\n")
+PY
 }
 
 main "$@"
