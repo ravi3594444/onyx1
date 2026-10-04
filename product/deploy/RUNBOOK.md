@@ -147,7 +147,12 @@ Safety rules in `restore.sh`:
 - It checks `SHA256SUMS` and requires every archive and `env.backup`.
 - It stops before any change if the target project has containers or volumes. It never
   deletes data.
-- An existing `.env` must be identical to `env.backup`. The six required secrets must be set.
+- It checks `env.backup` before it writes `.env`. The eight required secrets must be set, and
+  `MINIO_ROOT_*` must equal `S3_AWS_*`. An existing `.env` must be identical to `env.backup`.
+- It stops if the shell exports any of these secrets, because Compose would use the shell
+  values instead of the restored ones. Unset them first.
+- It locks the compose folder, so two restores cannot use the same folder. Use one compose
+  folder for each restore project.
 - It starts only nginx and the services nginx needs. It does not start `background`, so the
   copy does not sync connectors or run bots with live credentials.
 - It waits for `/api/health` (`RESTORE_HEALTH_TIMEOUT`, default 900 s). A healthy API shows
@@ -171,7 +176,8 @@ set -o pipefail
 ) 2>&1 | tee checks.log
 ```
 
-Each step prints `PASS` and `FAIL` lines and exits with 1 when a check fails. The loop stops
+Each step prints `PASS`, `FAIL` and `SKIP` lines and exits with 1 when a check fails. A `SKIP`
+does not fail the step; the step summary counts the skips. The loop stops
 at the first failed step. Without a model provider, add `--skip-chat` and leave out the
 `chat` and `chat-forced` steps. See `product/test-corpus/README.md`.
 

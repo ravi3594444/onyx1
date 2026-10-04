@@ -32,8 +32,8 @@ for volume in "${volumes[@]}"; do
   fi
 done
 
-# The fatal signals that the script catches. Nothing can catch SIGKILL.
-signals=(HUP INT TERM USR1 USR2 ALRM XCPU PIPE)
+# The fatal signals that the script catches (Linux names). Nothing can catch SIGKILL.
+signals=(HUP INT TERM USR1 USR2 ALRM VTALRM PROF XCPU XFSZ IO PWR SYS PIPE)
 stopped=0
 completed=0
 work_dir=""
@@ -64,7 +64,12 @@ finish() {
     if [[ -n "${work_dir}" ]]; then
       rm -rf "${work_dir}" || echo "Remove the partial backup ${work_dir}." >&2
     fi
-    echo "ERROR: backup failed. ${backup_dir} was not written." >&2
+    # A signal can stop the script after the rename. Then the backup is complete.
+    if [[ -e "${backup_dir}/SHA256SUMS" ]]; then
+      echo "ERROR: the script was stopped, but the backup in ${backup_dir} is complete." >&2
+    else
+      echo "ERROR: backup failed. ${backup_dir} was not written." >&2
+    fi
   fi
   exit "${status}"
 }
@@ -76,7 +81,10 @@ on_signal() {
 trap 'finish "$?"' EXIT
 trap on_signal "${signals[@]}"
 
-work_dir="$(mktemp -d "${backup_dir}.incomplete.XXXXXX")"
+# Set the name before the folder exists, so that finish can remove the folder after any signal.
+work_dir="${backup_dir}.incomplete.$$"
+# If the name is in use, keep that folder: this script did not make it.
+mkdir -m 700 "${work_dir}" || { work_dir="" && exit 1; }
 install -m 600 "${compose_dir}/.env" "${work_dir}/env.backup"
 
 started=$(date +%s)
@@ -88,7 +96,7 @@ for volume in "${volumes[@]}"; do
     >"${work_dir}/${volume}.tar.gz"
 done
 # A deploy or a second backup can start the stack during the copy. Then the copy is not consistent.
-# Use a file: a command substitution runs in a subshell without these traps.
+# Write to a file, as the copy step does, not to a command substitution.
 compose ps -q >"${work_dir}/running"
 if [[ -s "${work_dir}/running" ]]; then
   echo "ERROR: the stack ran during the copy. Make sure nothing starts it, then try again." >&2
@@ -104,8 +112,8 @@ downtime=$(($(date +%s) - started))
 (cd "${work_dir}" && sha256sum ./*.tar.gz env.backup >SHA256SUMS)
 mv -T "${work_dir}" "${backup_dir}"
 work_dir=""
-completed=1
 echo "Backup in ${backup_dir}. Downtime: ${downtime} s."
+completed=1
 if ((start_failed)); then
   echo "ERROR: the backup is complete, but the stack is stopped. ${start_hint}" >&2
   exit 1

@@ -141,9 +141,7 @@ ANSWERS = {
     "Q3": Expected(
         cite=NEW_REFUND_FILE, facts=("30 days",), old_facts=OLD_REFUND_FACTS
     ),
-    "Q4": Expected(
-        uncited=True, says_no_info=True, forbidden_patterns=(LEAVE_LENGTH,)
-    ),
+    "Q4": Expected(uncited=True, says_no_info=True, forbidden_patterns=(LEAVE_LENGTH,)),
     "Q5": Expected(
         retrieves_public=True, forbidden_text=(RESTRICTED_MARKER, "38 to 46")
     ),

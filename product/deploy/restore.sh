@@ -22,8 +22,8 @@ env_backup="${backup_dir}/env.backup"
 secrets=(USER_AUTH_SECRET ENCRYPTION_KEY_SECRET POSTGRES_PASSWORD OPENSEARCH_ADMIN_PASSWORD
   S3_AWS_ACCESS_KEY_ID S3_AWS_SECRET_ACCESS_KEY MINIO_ROOT_USER MINIO_ROOT_PASSWORD)
 # Settings that change the credentials, the data services or the files that Compose reads.
-overrides=(POSTGRES_USER POSTGRES_HOST OPENSEARCH_HOST REDIS_HOST S3_ENDPOINT_URL
-  COMPOSE_FILE COMPOSE_ENV_FILES)
+overrides=(POSTGRES_USER POSTGRES_HOST OPENSEARCH_HOST REDIS_HOST S3_ENDPOINT_URL FILE_STORE_BACKEND
+  COMPOSE_FILE COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE)
 
 die() {
   echo "ERROR: $*" >&2
@@ -31,11 +31,11 @@ die() {
 }
 compose() { (cd "${compose_dir}" && docker compose -p "${project}" "$@"); }
 # Prints the last value of a key in env.backup as Compose reads it: without outer spaces,
-# quotes or an inline comment.
+# quotes or an inline comment. A quoted value ends at the first quote without a backslash.
 env_value() {
   sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?${1}[[:space:]]*=//p" "${env_backup}" | tail -n 1 |
     sed -E -e 's/^[[:space:]]+|[[:space:]]+$//g' -e "/^[\"']/!s/(^|[[:space:]]+)#.*$//" \
-      -e "s/^\"(.*)\"$|^'(.*)'$/\1\2/"
+      -e 's/^"((\\.|[^"\\])*)".*$/\1/' -e "s/^'((\\\\.|[^'\\\\])*)'.*$/\\1/"
 }
 # A value that is only spaces or that starts with # is empty.
 has_value() {
@@ -60,13 +60,14 @@ done
 ((${#set_names[@]} == 0)) ||
   die "The shell sets ${set_names[*]}. Compose uses them, not env.backup. Run: unset ${set_names[*]}"
 
-# The lock stops a second restore.sh into the same project between the checks and the create.
-# It does not stop other docker commands. Without flock, run only one restore at a time.
+# The lock stops a second restore.sh in the same compose folder between the checks and the
+# create. It locks the folder itself, so no lock file exists that another user could replace.
+# Use one compose folder for each restore project. Without flock, run one restore at a time.
 if command -v flock >/dev/null; then
-  exec 9>>"/tmp/onyx-restore-${project}.lock"
-  flock -n 9 || die "Another restore into project ${project} runs. Wait until it ends."
+  exec 9<"${compose_dir}"
+  flock -n 9 || die "Another restore.sh uses ${compose_dir}. Wait until it ends."
 else
-  echo "WARNING: flock is not installed. Make sure that no other restore into ${project} runs." >&2
+  echo "WARNING: flock is not installed. Make sure that no other restore.sh runs." >&2
 fi
 
 # backup.sh writes SHA256SUMS last, so a complete backup lists every file.
