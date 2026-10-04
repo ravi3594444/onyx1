@@ -1,0 +1,283 @@
+# Bootstrap dev VM run 3 (verify), commit f03e1626f82250a4a6facfdc9f2935ffc73125d7, GitHub Actions job 111434020276
+# https://github.com/ravi3594444/onyx1/actions/runs/37201520783
+# Saved from the job log on 2026-10-04. Secrets are masked by GitHub as ***.
+
+##[group]Run set -euo pipefail
+set -euo pipefail
+case "${BOOTSTRAP_ACTION}" in
+  inspect) args="inspect" ;;
+  install) args="install ${GITHUB_SHA} ${WEB_DOMAIN}" ;;
+  verify) args="verify ${GITHUB_SHA}" ;;
+  verify-with-chat) args="verify ${GITHUB_SHA} with-chat" ;;
+  *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
+esac
+if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ || ! "${WEB_DOMAIN}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+  echo "::error::GITHUB_SHA or web_domain is not valid."
+  exit 1
+fi
+ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+trap 'rm -rf "${ssh_dir}"' EXIT
+chmod 700 "${ssh_dir}"
+umask 077
+printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
+printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
+log="${RUNNER_TEMP}/bootstrap-${BOOTSTRAP_ACTION}.log"
+# pipefail: the job fails when the script on the VM fails, not only when tee fails.
+ssh -F /dev/null -i "${ssh_dir}/key" \
+  -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o PreferredAuthentications=publickey \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+  -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=4 \
+  -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+  "bash -s -- ${args}" <product/deploy/vm-bootstrap.sh 2>&1 | tee "${log}"
+{
+  echo "## Bootstrap dev VM: ${BOOTSTRAP_ACTION}"
+  echo
+  echo "Commit: \`${GITHUB_SHA}\`. The full log is in the artifact \`bootstrap-${BOOTSTRAP_ACTION}-log\`."
+  echo
+  echo '```'
+  tail -n 40 "${log}"
+  echo '```'
+} >>"${GITHUB_STEP_SUMMARY}"
+shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+env:
+  BOOTSTRAP_ACTION: verify
+  WEB_DOMAIN: http://my-knowledge.duckdns.org
+  DEV_SSH_HOST: ***
+  DEV_SSH_USER: ***
+  DEV_SSH_KEY: ***
+  DEV_SSH_KNOWN_HOSTS: ***
+##[endgroup]
+Evidence folder: /srv/onyx/evidence/20261004T121623Z
+
+== vm-bootstrap verify f03e1626f82250a4a6facfdc9f2935ffc73125d7 2026-10-04T12:16:23Z (with_chat=0) ==
+http://localhost:3000/api/health answers 200.
+
+== source at f03e1626f82250a4a6facfdc9f2935ffc73125d7 ==
+f03e1626f82250a4a6facfdc9f2935ffc73125d7 2026-10-04T11:49:42+00:00 Merge branch 'claude/busy-dijkstra-nfef6q': reviewed product deployment work
+
+== test users ==
+Created /srv/onyx/test-users.env.
+registered admin@example.com
+registered user-a@example.com
+registered user-b@example.com
+admin@example.com has the admin capability.
+
+== step cleanup ==
+no test connectors from earlier runs
+no 'HR private' projects from earlier runs
+project onyx-restore has no containers and no volumes
+-- step cleanup: exit 0
+
+== step index ==
+PASS new index attempt on cc-pair 2 indexes 4 documents: {"seconds": 35.9, "timeout_seconds": 900, "attempt_id": 1, "status": "success", "indexing": false, "num_docs_indexed": 4}
+index: {"cc_pair_id": 2, "documents": 4, "seconds_upload_to_indexed": 36.4, "seconds_waiting_for_indexing": 35.9}
+PASS hr-salary-bands-restricted.md in user B project reaches COMPLETED: {"owner": "user-b@example.com", "project_id": 1, "statuses": ["COMPLETED"], "seconds": 5.1}
+PASS step index: 2 checks passed
+-- step index: exit 0
+
+== step search ==
+PASS search Q1 as user-a@example.com: {"expected_top": "expense-policy.md", "seconds": 15.14, "top_titles": ["expense-policy.md", "refund-policy-2026.md", "whatsapp-assistant-product-guide.md", "refund-policy-2025.md"]}
+PASS search Q2 as user-a@example.com: {"expected_top": "whatsapp-assistant-product-guide.md", "seconds": 0.21, "top_titles": ["whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md"]}
+PASS search Q3 as user-a@example.com: {"expected_top": "refund-policy-2026.md", "seconds": 0.19, "top_titles": ["refund-policy-2026.md", "refund-policy-2025.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q4 as user-a@example.com: {"expected_top": null, "seconds": 0.15, "top_titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search Q5 as user-a@example.com: {"expected_top": null, "seconds": 0.17, "top_titles": ["expense-policy.md", "whatsapp-assistant-product-guide.md", "refund-policy-2026.md", "refund-policy-2025.md"]}
+PASS search shows hr-salary-bands-restricted.md to its owner user-b@example.com: {"marker_found": true, "titles": ["hr-salary-bands-restricted.md", "expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from user-a@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides KESTREL-7731 from admin@example.com: {"public_found": true, "titles": ["expense-policy.md", "refund-policy-2026.md", "refund-policy-2025.md", "whatsapp-assistant-product-guide.md"]}
+PASS step search: 8 checks passed
+-- step search: exit 0
+
+== step privacy ==
+PASS user B can read own chat session: {"status": 200}
+PASS user B project list shows own project: {"status": 200, "body": [{"id": 1, "name": "HR private", "description": null, "created_at": "2026-10-04T12:17:03.286915Z", "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "instructions": null, "chat_sessions": []}]}
+PASS user B file status lookup returns own files: {"status": 200, "body": [{"id": "88b81084-2970-4f83-b5d3-16a7c4bb6503", "temp_id": null, "name": "hr-salary-bands-restricted.md", "project_id": null, "user_id": "ad00a308-b790-4bb7-bfe7-469e86b019e2", "file_id": "cd8de7f2-0cb4-4791-afa6-cb8b2211c5ee", "created_at": "2026-10-04T12:17:03.552883", "status": "COMPLETED", "last_accessed_at": "2026-10-04T12:17:03.550629Z", "file_type": "text/markdown", "chat_file_type": "plain_text", "token_count": 0, "chunk_count": 1}]}
+PASS user A can read own chat session: {"status": 200}
+PASS user A cannot read user B chat session: {"status": 403, "body": {"error_code": "UNAUTHORIZED", "detail": "Access denied"}}
+PASS user A project list hides user B project: {"status": 200, "body": []}
+PASS user A file status lookup hides user B file 88b81084-2970-4f83-b5d3-16a7c4bb6503: {"status": 200, "body": []}
+PASS step privacy: 7 checks passed
+-- step privacy: exit 0
+
+== step update ==
+PASS new index attempt on cc-pair 2 indexes 4 documents: {"seconds": 20.4, "timeout_seconds": 900, "attempt_id": 2, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS prune after the update removes the old version: {"seconds": 0.0, "timeout_seconds": 900, "before": null, "last_pruned": "2026-10-04T12:17:34.852760Z"}
+update applied: {"seconds": 20.5}
+PASS search shows the new support hours and not the old ones: {"new_hours_found": true, "old_hours_found": false}
+SKIP chat Q2 after update: "--skip-chat: no model answer"
+PASS step update: 3 checks passed, 1 skipped
+-- step update: exit 0
+
+== step delete ==
+PASS search finds refund-policy-2025.md before deletion: {"titles": ["refund-policy-2025.md", "refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS deletion of refund-policy-2025.md reaches search: {"seconds": 5.2, "timeout_seconds": 900, "titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+PASS search hides refund-policy-2025.md and shows refund-policy-2026.md: {"titles": ["refund-policy-2026.md", "expense-policy.md", "whatsapp-assistant-product-guide.md"]}
+SKIP chat Q3 after deletion: "--skip-chat: no model answer"
+PASS step delete: 3 checks passed, 1 skipped
+-- step delete: exit 0
+
+== step prune-race ==
+PASS new index attempt on cc-pair 3 indexes 4 documents: {"seconds": 10.2, "timeout_seconds": 900, "attempt_id": 3, "status": "success", "indexing": false, "num_docs_indexed": 4}
+PASS all documents of the new connector are in search: {"found": ["FILE_CONNECTOR__11e7aeba-29b6-4aa5-ab85-d5207fd530c2", "FILE_CONNECTOR__636dfb57-2d86-4605-ae5a-4971a9ed35ba", "FILE_CONNECTOR__8993b4b7-36db-46d5-b1c3-60554654aa77", "FILE_CONNECTOR__f02ce512-183a-4d6e-a90a-46277a292f73"]}
+removal of whatsapp-assistant-product-guide.md during a prune: {"second_prune_started": false, "still_in_search_after_settle": true, "settle_seconds": 60}
+PASS race reproduced: a file removed during a prune stays in search: {"file": "whatsapp-assistant-product-guide.md", "note": "FAIL means the race did not occur in this run"}
+PASS manual prune accepted: {"status": 200, "body": {"success": true, "message": "Successfully created the pruning task.", "data": null}}
+PASS manual prune finished: {"last_pruned": "2026-10-04T12:19:34.831231Z"}
+PASS manual prune removes whatsapp-assistant-product-guide.md from search: {"seconds": 0.1, "remaining": ["FILE_CONNECTOR__11e7aeba-29b6-4aa5-ab85-d5207fd530c2", "FILE_CONNECTOR__636dfb57-2d86-4605-ae5a-4971a9ed35ba", "FILE_CONNECTOR__8993b4b7-36db-46d5-b1c3-60554654aa77"]}
+PASS step prune-race: 6 checks passed
+-- step prune-race: exit 0
+
+== step backup ==
+ Container onyx-nginx-1 Stopping
+ Container onyx-background-1 Stopping
+ Container onyx-nginx-1 Stopped
+ Container onyx-web_server-1 Stopping
+ Container onyx-background-1 Stopped
+ Container onyx-indexing_model_server-1 Stopping
+ Container onyx-web_server-1 Stopped
+ Container onyx-api_server-1 Stopping
+ Container onyx-indexing_model_server-1 Stopped
+ Container onyx-api_server-1 Stopped
+ Container onyx-inference_model_server-1 Stopping
+ Container onyx-opensearch-1 Stopping
+ Container onyx-relational_db-1 Stopping
+ Container onyx-minio-1 Stopping
+ Container onyx-cache-1 Stopping
+ Container onyx-relational_db-1 Stopped
+ Container onyx-minio-1 Stopped
+ Container onyx-cache-1 Stopped
+ Container onyx-opensearch-1 Stopped
+ Container onyx-inference_model_server-1 Stopped
+ Container onyx-relational_db-1 Starting
+ Container onyx-minio-1 Starting
+ Container onyx-opensearch-1 Starting
+ Container onyx-indexing_model_server-1 Starting
+ Container onyx-inference_model_server-1 Starting
+ Container onyx-cache-1 Starting
+ Container onyx-relational_db-1 Started
+ Container onyx-minio-1 Started
+ Container onyx-opensearch-1 Started
+ Container onyx-indexing_model_server-1 Started
+ Container onyx-inference_model_server-1 Started
+ Container onyx-cache-1 Started
+ Container onyx-api_server-1 Starting
+ Container onyx-background-1 Starting
+ Container onyx-api_server-1 Started
+ Container onyx-web_server-1 Starting
+ Container onyx-web_server-1 Started
+ Container onyx-web_server-1 Waiting
+ Container onyx-api_server-1 Waiting
+ Container onyx-background-1 Started
+ Container onyx-web_server-1 Healthy
+ Container onyx-api_server-1 Healthy
+ Container onyx-nginx-1 Starting
+ Container onyx-nginx-1 Started
+Backup in /srv/backups/20261004T121938Z. Downtime: 71 s.
+-- step backup: exit 0
+
+== step restore ==
+mkdir: cannot create directory ‘/srv/onyx-restore’: Permission denied
+
+== release files v4.8.4 into /srv/onyx-restore/deployment/docker_compose ==
+mkdir: cannot create directory ‘/srv/onyx-restore’: Permission denied
+main: line 304: cd: /srv/onyx-restore/deployment/docker_compose/../..: No such file or directory
+tar: : Cannot open: No such file or directory
+tar: Error is not recoverable: exiting now
+main: line 306: /srv/onyx-restore/deployment/docker_compose/compose.override.yml: No such file or directory
+Exported v4.8.4 (d15d4451607965e0e349aad231f858596e85ea52) and compose.override.yml.
+stopping the live stack
+ Container onyx-background-1 Stopping
+ Container onyx-nginx-1 Stopping
+ Container onyx-nginx-1 Stopped
+ Container onyx-web_server-1 Stopping
+ Container onyx-background-1 Stopped
+ Container onyx-indexing_model_server-1 Stopping
+ Container onyx-web_server-1 Stopped
+ Container onyx-api_server-1 Stopping
+ Container onyx-indexing_model_server-1 Stopped
+ Container onyx-api_server-1 Stopped
+ Container onyx-relational_db-1 Stopping
+ Container onyx-cache-1 Stopping
+ Container onyx-minio-1 Stopping
+ Container onyx-inference_model_server-1 Stopping
+ Container onyx-opensearch-1 Stopping
+ Container onyx-minio-1 Stopped
+ Container onyx-relational_db-1 Stopped
+ Container onyx-cache-1 Stopped
+ Container onyx-opensearch-1 Stopped
+ Container onyx-inference_model_server-1 Stopped
+/srv/onyx-src/product/deploy/restore.sh: line 15: cd: /srv/onyx-restore/deployment/docker_compose: No such file or directory
+-- step restore: exit 1
+
+== step restore-down ==
+project onyx-restore has no containers and no volumes
+-- step restore-down: exit 0
+
+== step live-start ==
+ Container onyx-minio-1 Starting
+ Container onyx-relational_db-1 Starting
+ Container onyx-inference_model_server-1 Starting
+ Container onyx-opensearch-1 Starting
+ Container onyx-cache-1 Starting
+ Container onyx-indexing_model_server-1 Starting
+ Container onyx-minio-1 Started
+ Container onyx-relational_db-1 Started
+ Container onyx-inference_model_server-1 Started
+ Container onyx-opensearch-1 Started
+ Container onyx-cache-1 Started
+ Container onyx-api_server-1 Starting
+ Container onyx-api_server-1 Started
+ Container onyx-web_server-1 Starting
+ Container onyx-indexing_model_server-1 Started
+ Container onyx-background-1 Starting
+ Container onyx-background-1 Started
+ Container onyx-web_server-1 Started
+ Container onyx-web_server-1 Waiting
+ Container onyx-api_server-1 Waiting
+ Container onyx-web_server-1 Healthy
+ Container onyx-api_server-1 Healthy
+ Container onyx-nginx-1 Starting
+ Container onyx-nginx-1 Started
+http://localhost:3000/api/health answers 200.
+-- step live-start: exit 0
+
+== docker stats ==
+CONTAINER ID   NAME                            CPU %     MEM USAGE / LIMIT     MEM %     NET I/O           BLOCK I/O     PIDS
+c46c66ffeba7   onyx-nginx-1                    0.00%     6.199MiB / 15.61GiB   0.04%     1.43kB / 1.39kB   0B / 0B       10
+6a29d0916ce4   onyx-web_server-1               0.02%     80.86MiB / 15.61GiB   0.51%     1.88kB / 358B     0B / 0B       11
+8d7fbddd5664   onyx-api_server-1               0.19%     592.9MiB / 15.61GiB   3.71%     114kB / 112kB     0B / 0B       9
+30e3c7bbd5f5   onyx-background-1               5.55%     1.8GiB / 15.61GiB     11.53%    369kB / 399kB     0B / 262kB    65
+8314b812ea94   onyx-indexing_model_server-1    0.19%     319.4MiB / 15.61GiB   2.00%     1.94kB / 126B     0B / 0B       9
+ac5cad9adb3f   onyx-cache-1                    0.68%     4.512MiB / 15.61GiB   0.03%     288kB / 278kB     0B / 0B       6
+b64eebad2fba   onyx-inference_model_server-1   0.20%     319.4MiB / 15.61GiB   2.00%     2.28kB / 126B     0B / 0B       9
+a6f26d5cdff5   onyx-minio-1                    0.05%     209.8MiB / 15.61GiB   1.31%     9.65kB / 5.28kB   0B / 8.19kB   11
+88f6c162cffb   onyx-relational_db-1            0.02%     113.2MiB / 15.61GiB   0.71%     186kB / 176kB     0B / 221kB    60
+59eb2adfd082   onyx-opensearch-1               8.36%     2.539GiB / 15.61GiB   16.26%    40.2kB / 32.3kB   0B / 15.1MB   74
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           15989        6508        2398          22        7082        8962
+Swap:              0           0           0
+
+== disk / ==
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        97G   23G   75G  24% /
+
+== summary ==
+step             exit code
+cleanup          0
+index            0
+search           0
+privacy          0
+update           0
+delete           0
+prune-race       0
+backup           0
+restore          1
+restore-down     0
+live-start       0
+RESULT: FAIL (one or more steps did not exit with 0)
+verify stopped early with exit 1.
+##[error]Process completed with exit code 1.
