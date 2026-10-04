@@ -75,15 +75,18 @@ main() {
   (cd "${compose_dir}" && docker compose up -d) >>"${log}" 2>&1 ||
     die "docker compose up failed. See ${log}."
 
-  local port url deadline
+  local port domain url deadline
   port="$(sed -n -E 's/^HOST_PORT=//p' "${env_file}" | tail -n 1)"
-  # With the HTTPS overlay, nginx publishes only ports 80 and 443.
-  if [[ "$(sed -n -E 's/^COMPOSE_FILE=//p' "${env_file}" | tail -n 1)" == *compose.https.yml* ]]; then
-    port=80
-  fi
   url="http://localhost:${port:-3000}/api/health"
+  # With the HTTPS overlay, port 80 only redirects, so the check uses the public HTTPS URL.
+  if [[ "$(sed -n -E 's/^COMPOSE_FILE=//p' "${env_file}" | tail -n 1)" == *compose.https.yml* ]]; then
+    domain="$(sed -n -E 's/^DOMAIN=//p' "${env_file}" | tail -n 1)"
+    [[ -n "${domain}" ]] || die "COMPOSE_FILE names compose.https.yml but .env has no DOMAIN."
+    url="https://${domain}/api/health"
+  fi
   deadline=$((SECONDS + health_timeout))
-  until curl -fsS -o /dev/null --max-time 10 "${url}"; do
+  # Only HTTP 200 passes: curl -f accepts a redirect.
+  until [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${url}" || true)" == 200 ]]; do
     ((SECONDS < deadline)) ||
       die "${url} is not healthy after ${health_timeout} s. Inspect: cd ${compose_dir} && docker compose logs api_server"
     sleep 10

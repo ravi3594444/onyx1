@@ -23,8 +23,8 @@ readonly COMPOSE_DIR="${ONYX_DEPLOY_DIR}/deployment/docker_compose"
 readonly RESTORE_COMPOSE_DIR="${ONYX_RESTORE_DIR}/deployment/docker_compose"
 readonly FORK_URL=https://github.com/ravi3594444/onyx1
 readonly UPSTREAM_URL=https://github.com/onyx-dot-app/onyx
-# set_live_url reads .env: port 80 with the HTTPS overlay, else HOST_PORT. PUBLIC_URL is
-# the HTTPS URL of the stack when the overlay is active, else empty.
+# set_live_url reads .env: the public HTTPS URL with the HTTPS overlay, else HOST_PORT on
+# localhost. PUBLIC_URL is the HTTPS URL when the overlay is active, else empty.
 LIVE_URL=http://localhost:3000
 PUBLIC_URL=""
 readonly RESTORE_URL=http://localhost:3100
@@ -355,9 +355,10 @@ export_release_files() {
 # With compose.https.yml in COMPOSE_FILE, nginx publishes only ports 80 and 443.
 set_live_url() {
   if [[ "$(live_env_value COMPOSE_FILE "")" == *compose.https.yml* ]]; then
-    # The checks run over loopback. check_public_url records the public HTTPS URL apart.
-    LIVE_URL=http://localhost
-    PUBLIC_URL="https://${DNS_NAME}"
+    # Plain HTTP on the published port 80 only redirects, so the checks use the public
+    # HTTPS URL, with a trusted certificate, like a user does.
+    LIVE_URL="https://${DNS_NAME}"
+    PUBLIC_URL="${LIVE_URL}"
   else
     LIVE_URL="http://localhost:$(live_env_value HOST_PORT 3000)"
   fi
