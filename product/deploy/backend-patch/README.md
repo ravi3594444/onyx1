@@ -7,13 +7,17 @@ patches in order, then runs `docker build --target runtime`. The workflow
 
 ## What changes and why
 
-Every company (tenant) on the multi-tenant stack gets two platform defaults when
+Every company (tenant) on the multi-tenant stack gets four platform defaults when
 Onyx creates its tenant:
 
 1. The platform Fireworks model is the default chat model. The company does not need
    its own key.
 2. The default assistant prompt is the built-in Onyx prompt plus the reviewed
    knowledge instructions.
+3. The platform web search provider is the active search provider. The company does
+   not need its own search key.
+4. The Code Interpreter row exists (the tenant migration seeds it). Its state is
+   reported, never changed.
 
 The change uses Onyx's own tenant setup. `setup_tenant` in
 `ee/onyx/server/tenants/provisioning.py` runs for each new company and for each
@@ -27,7 +31,7 @@ change.
 | --- | --- |
 | `overlay/backend/onyx/axi/__init__.py` | Package marker |
 | `overlay/backend/onyx/axi/tenant_defaults.py` | Env config, `KNOWLEDGE_INSTRUCTIONS`, `apply_platform_defaults(db_session)` |
-| `overlay/backend/onyx/axi/backfill.py` | `python -m onyx.axi.backfill [--dry-run] [--tenant-id ID]` for tenants that exist already |
+| `overlay/backend/onyx/axi/backfill.py` | `python -m onyx.axi.backfill` for tenants that exist already, and `--rotate-platform-key` |
 
 The upstream Dockerfile copies the whole `onyx/` package (`COPY ./onyx /app/onyx`), so
 the new subpackage ships. The build stops when an overlay file has an upstream
@@ -57,10 +61,23 @@ Set these on the api_server and on the background workers of the multi-tenant st
 | `FIREWORKS_DEFAULT_DISPLAY_NAME` | `22nd X AI model` | Provider name in the admin page |
 | `FIREWORKS_DEFAULT_PROVIDER` | `fireworks_ai` | LiteLLM provider type |
 | `FIREWORKS_DEFAULT_API_BASE` | none | Optional endpoint override |
+| `WEB_SEARCH_DEFAULT_PROVIDER` | none | Search provider type: `exa`, `brave`, `serper`, `tavily`, `google_pse` or `searxng`. Without it the web search step is skipped (`skipped_not_configured`). |
+| `WEB_SEARCH_DEFAULT_API_KEY` | none | Search key. Required for every type except `searxng`. Secret, same rule as the platform key. |
+| `WEB_SEARCH_DEFAULT_CONFIG` | none | JSON object of strings, the `config` of the provider row. Example: `{"searxng_base_url":"http://searxng:8080","num_results":"10"}`. Google PSE needs `search_engine_id`. |
+| `WEB_SEARCH_DEFAULT_DISPLAY_NAME` | `22nd X AI web search` | Provider name in the admin page |
 
-The provider row has the same values as the single-tenant setup through
+The settings are checked offline with `build_search_provider_from_config`, the same
+check as the admin endpoint. A bad value fails the web search step for every tenant;
+the error text never holds the key.
+
+The LLM provider row has the same values as the single-tenant setup through
 `PUT /api/admin/llm/provider?is_creation=true`: public, not auto mode, no groups, no
 personas, `custom_config` `{}`, one visible model without image input.
+
+The search provider row has the same values as `POST /api/admin/web-search/search-providers`
+with `activate=true`. The step never writes `internet_content_provider`: without an
+active content row, Onyx uses its built-in crawler to open the results. It never
+changes `persona__tool` or `tool.enabled` either.
 
 ## Knowledge instructions
 
@@ -84,11 +101,30 @@ the tools of the assistant do not change.
 | Model | otherwise | `created`: provider created and made the default |
 | Instructions | assistant prompt is NULL (the built-in default) | `set` |
 | Instructions | any other value | `kept` |
+| Web search | no `WEB_SEARCH_DEFAULT_PROVIDER` | `skipped_not_configured` (no marker) |
+| Web search | the marker row exists | `kept_marker`: nothing is read or written |
+| Web search | no marker, any search provider row exists | `kept`: the marker is written with `{"decision": "kept"}` |
+| Web search | no marker, no search provider row | `created`: provider row created and activated, marker `{"decision": "created"}` |
+| Code Interpreter | no `code_interpreter_server` row | `seeded`: one row with `server_enabled = true` |
+| Code Interpreter | row with `server_enabled = true` | `enabled` |
+| Code Interpreter | row with `server_enabled = false` | `disabled_kept`: never flipped to true |
 
-The model step raises (and writes nothing) when our provider exists without our
-model, or when several providers have our name. An admin must then pick the
-default by hand. Each call logs one INFO line with the tenant id and both results. The
-key is never logged or printed.
+The marker is the row `axi_platform_web_search` in the tenant's `key_value_store`
+table. It records that the web search decision was made once. After it exists, the
+step does nothing: a company that deletes or replaces our provider keeps its state.
+
+Caveat for the first backfill of a tenant that existed before this version: the step
+cannot tell an owner's earlier deletion from "never configured". Both look like "no
+search provider row", so the first run creates our provider. Run `--dry-run` first and
+read the `web_search=created` lines; set a marker by hand for a tenant that must stay
+without a provider.
+
+The four steps are independent. Each runs in its own try: on an error the step rolls
+back, the next step still runs, and at the end a `RuntimeError` names the failed steps
+(no secrets). The model step raises when our provider exists without our model, or
+when several providers have our name. An admin must then pick the default by hand.
+Each call logs one INFO line with the tenant id and the four results. The keys are
+never logged or printed.
 
 ## Backfill
 
@@ -100,8 +136,63 @@ python -m onyx.axi.backfill             # apply
 ```
 
 It lists every tenant schema (`get_all_tenant_ids`), also the pool tenants that no
-company owns yet, and prints `tenant <id>: llm=<result> instructions=<result>` and a
-summary. The exit status is 1 when a tenant failed.
+company owns yet, and prints one line per tenant:
+
+```
+tenant <id>: llm=<result> instructions=<result> web_search=<result> code_interpreter=<result> content=<builtin|provider type>
+```
+
+`content` is read only: the active content provider type, or `builtin` for the Onyx
+crawler. A failed tenant prints `ERROR` and the summary counts it; the exit status is
+then 1. `--tenant-id ID` runs one tenant.
+
+## Platform key rotation
+
+The platform key is in every tenant's `llm_provider` row (and in voice provider rows
+that copied it). `--rotate-platform-key` replaces it in every tenant schema:
+
+```bash
+# NEW key: FIREWORKS_DEFAULT_API_KEY of the container.
+# OLD keys: SHA-256 fingerprints, one per line, '#' comments allowed.
+python -m onyx.axi.backfill --rotate-platform-key --dry-run \
+  --fingerprints-file /srv/onyx/secrets/platform-key-fingerprints
+python -m onyx.axi.backfill --rotate-platform-key \
+  --fingerprints-file /srv/onyx/secrets/platform-key-fingerprints
+# An old key that is not in the file: one line on stdin, never on the command line.
+printf '%s\n' "$OLD_KEY" | python -m onyx.axi.backfill --rotate-platform-key --old-key-stdin
+```
+
+Rules:
+
+- The new key is `FIREWORKS_DEFAULT_API_KEY`; the command refuses an empty value.
+- It refuses to run when Enterprise Edition is not active (`global_version.is_ee_version()`),
+  because only the EE build encrypts the stored keys. It warns when `ENCRYPTION_KEY_SECRET`
+  is empty.
+- A row is rotated when its decrypted key equals the stdin key or when the SHA-256 of
+  the key is in the fingerprints file, and the key is not the new key already. The
+  write goes through the ORM, so `EncryptedString` encrypts the new value. After the
+  commit (one per tenant) the row is read back and the decrypted value is compared.
+- `llm_provider` and `voice_provider` rows are rotated. `internet_search_provider`
+  and `internet_content_provider` rows are scanned and reported (`search_matched`)
+  only: the search key is a different secret. Add `--include-web-search` to rotate
+  them too.
+- Output per tenant: `tenant <id>: llm_rows=<n> voice_rows=<n> search_rows=<n>
+  matched=<n> rotated=<n> already_new=<n> search_matched=<n>`, then
+  `rotation: tenants X, matched Y, rotated Z, failed W`. Exit status 1 on any
+  failure. `--dry-run` writes nothing. No key and no matching value is printed; the
+  SHA-256 of the new key is printed so that the operator can store it.
+
+Procedure (the VM script writes the fingerprints of every platform key it has seen to
+`/srv/onyx/secrets/platform-key-fingerprints`):
+
+1. Put the new key in the deployment `.env` and recreate the containers. New tenants
+   now get the new key.
+2. Run the rotation with `--dry-run` and read the counts. Then run it without
+   `--dry-run`.
+3. Run `--dry-run` again: `matched 0`.
+4. Revoke the old key at Fireworks.
+5. After a restore of an older backup, run the rotation again: the restored rows hold
+   the old key.
 
 ## Credential protection review (v4.8.4)
 
@@ -132,8 +223,16 @@ Line numbers are for the unpatched v4.8.4 `backend/`.
   (`onyx/server/manage/voice/api.py:217-231`). A company admin could so send the platform
   key to another endpoint. Patch 0003 allows the copy only for the same provider type and
   API base.
+- Web search providers: `GET /api/admin/web-search/search-providers` returns
+  `masked_api_key` (first 4 and last 4 characters). `POST .../search-providers` with
+  an `id` and `api_key_changed` false keeps the stored key
+  (`onyx/db/web_search.py`, `_apply_search_provider_updates`) and takes the provider
+  type from the request. A company admin can so switch the row from `exa` to another
+  type and send the platform search key to that endpoint. This is an upstream gap;
+  we do not patch it. The search key pays for searches only: set a spend limit on
+  the search account, or use `searxng` (no key).
 - Remaining exposure, accepted for the development stack: a company admin sees the first
-  and last 4 characters of the platform key, and can add other models of the same
+  and last 4 characters of the platform keys, and can add other models of the same
   provider to the platform provider (the key then pays for them). Set a spend limit on
   the Fireworks account; give each company its own key when that is not acceptable.
 - Non-admin endpoints (`GET /api/llm/provider`, `GET /api/llm/persona/{id}/providers`,
@@ -154,9 +253,9 @@ compiles the patched files. Every item prints PASS or FAIL. Change
 ## Rollback
 
 The official backend digest stays in `product/deploy/release.env` as
-`ONYX_BACKEND_IMAGE`. To roll back, point the stack at that digest again and restart.
-Tenants keep their provider and prompt rows; they are normal Onyx data that admins
-can change.
+`ONYX_BACKEND_IMAGE`; our image is `ONYX_BACKEND_IMAGE_CLOUD`. To roll back, point
+the stack at the official digest again and restart. Tenants keep their provider,
+marker and prompt rows; they are normal Onyx data that admins can change.
 
 ## Licence notes
 

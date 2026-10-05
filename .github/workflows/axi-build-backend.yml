@@ -1,7 +1,7 @@
 name: Build 22nd X AI backend image
 # Builds the Onyx backend image at the pinned upstream tag with product/deploy/backend-patch
 # applied (new onyx/axi package, reviewed patches), then pushes it to GHCR. Deploy the printed
-# digest through ONYX_BACKEND_IMAGE in product/deploy/release.env.
+# digest through ONYX_BACKEND_IMAGE_CLOUD in product/deploy/release.env (the saas stack pin).
 
 on:
   workflow_dispatch:
@@ -66,17 +66,30 @@ jobs:
       - name: Smoke test the image
         run: |
           docker run --rm "${IMAGE}:${GITHUB_SHA}" python -c "
+          import dataclasses
           import inspect
           import onyx.axi.backfill
-          import onyx.axi.tenant_defaults
+          import onyx.axi.tenant_defaults as td
           import ee.onyx.server.tenants.provisioning as p
           import onyx.server.manage.llm.api as llm_api
           assert 'apply_platform_defaults' in inspect.getsource(p.setup_tenant)
           assert 'new_provider_type' in inspect.getsource(llm_api._validate_llm_provider_change)
-          assert onyx.axi.tenant_defaults.FIREWORKS_DEFAULT_API_KEY is None
+          assert td.FIREWORKS_DEFAULT_API_KEY is None
+          assert td.WEB_SEARCH_DEFAULT_PROVIDER is None
+          assert td.WEB_SEARCH_DEFAULT_API_KEY is None
+          assert td.WEB_SEARCH_MARKER_KEY == 'axi_platform_web_search'
+          assert td._web_search_settings() is None
+          fields = {f.name for f in dataclasses.fields(td.PlatformDefaultsResult)}
+          assert fields == {'llm', 'instructions', 'web_search', 'code_interpreter'}, fields
+          assert callable(onyx.axi.backfill._rotate_tenant)
           print('smoke test passed')
           "
-          docker run --rm "${IMAGE}:${GITHUB_SHA}" python -m onyx.axi.backfill --help
+          docker run --rm "${IMAGE}:${GITHUB_SHA}" python -m onyx.axi.backfill --help \
+            | tee "${RUNNER_TEMP}/backfill-help.txt"
+          for option in --rotate-platform-key --old-key-stdin --fingerprints-file --include-web-search; do
+            grep -q -- "${option}" "${RUNNER_TEMP}/backfill-help.txt" \
+              || { echo "::error::backfill --help lacks ${option}"; exit 1; }
+          done
       - name: Push the image
         env:
           RUN_NUMBER: ${{ github.run_number }}
@@ -97,10 +110,10 @@ jobs:
             echo
             echo "Tags: \`${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}\`, \`${IMAGE}:${GITHUB_SHA}\`"
             echo
-            echo "Deploy: set in product/deploy/release.env"
+            echo "Deploy: set in product/deploy/release.env (the saas stack pin)"
             echo
             echo '```'
-            echo "ONYX_BACKEND_IMAGE=${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}@${digest}"
+            echo "ONYX_BACKEND_IMAGE_CLOUD=${IMAGE}:${ONYX_RELEASE_TAG}-axi.${RUN_NUMBER}@${digest}"
             echo '```'
           } >>"${GITHUB_STEP_SUMMARY}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v4
