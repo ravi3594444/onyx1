@@ -58,7 +58,9 @@ jobs:
           done
       - name: Compile Python and parse shell scripts
         run: |
-          python3 -m py_compile product/test-corpus/run_checks.py
+          while IFS= read -r -d '' script; do
+            python3 -m py_compile "${script}"
+          done < <(git ls-files -z 'product/*.py')
           while IFS= read -r -d '' script; do
             bash -n "${script}"
           done < <(git ls-files -z 'product/*.sh')
@@ -113,6 +115,133 @@ jobs:
             echo "::error::The Onyx images are not the digests in release.env."
             exit 1
           fi
+      - name: Render the multi-tenant file set (project onyx-saas)
+        # The file set of vm-bootstrap.sh saas_prepare plus compose.tools.yml (Code Interpreter,
+        # its gateway and SearXNG). The dummy .env has the required keys and the cloud image pins.
+        run: |
+          set -euo pipefail
+          # Not exported: Compose reads every value from the .env of the saas folder.
+          source product/deploy/release.env
+          saas="${RUNNER_TEMP}/onyx-saas/deployment"
+          mkdir -p "${saas}"
+          cp -a "${RUNNER_TEMP}/onyx/deployment/." "${saas}/"
+          rm -f "${saas}/docker_compose/.env"
+          for file in product/deploy/compose.override.yml product/deploy/compose.https.yml \
+            product/deploy/mt/compose.saas.yml product/deploy/mt/compose.tools.yml; do
+            if [[ ! -f "${file}" ]]; then
+              echo "::error::${file} is missing. The onyx-saas file set needs it."
+              exit 1
+            fi
+            cp "${file}" "${saas}/docker_compose/"
+          done
+          # compose.tools.yml mounts the configs from tools/ next to the compose files.
+          mkdir -p "${saas}/docker_compose/tools"
+          for file in product/deploy/tools/ci-gateway.conf product/deploy/tools/searxng-settings.yml; do
+            if [[ ! -f "${file}" ]]; then
+              echo "::error::${file} is missing. compose.tools.yml mounts it."
+              exit 1
+            fi
+            cp "${file}" "${saas}/docker_compose/tools/"
+          done
+          product/deploy/make-env.sh "${saas}/docker_compose" https://example.com
+          env_file="${saas}/docker_compose/.env"
+          set_env_value() {
+            if grep -qE "^#? ?${1}=" "${env_file}"; then
+              sed -i -E "s|^#? ?${1}=.*|${1}=${2}|" "${env_file}"
+            else
+              printf '%s=%s\n' "$1" "$2" >>"${env_file}"
+            fi
+          }
+          # Every image pin of release.env, as vm-bootstrap.sh writes them into the saas .env.
+          while IFS='=' read -r key value; do
+            set_env_value "${key}" "${value}"
+          done < <(grep -E '^[A-Z0-9_]+_IMAGE(_[A-Z]+)?=' product/deploy/release.env)
+          set_env_value ONYX_BACKEND_IMAGE "${ONYX_BACKEND_IMAGE_CLOUD}"
+          set_env_value ONYX_WEB_SERVER_IMAGE "${ONYX_WEB_SERVER_IMAGE_CLOUD}"
+          set_env_value COMPOSE_PROFILES s3-filestore,code-interpreter
+          set_env_value DOMAIN example.com
+          set_env_value SEARXNG_SECRET dummy
+          set_env_value FIREWORKS_DEFAULT_API_KEY dummy
+          set_env_value DOCKER_SOCK_PATH /var/run/docker.sock
+          cd "${saas}/docker_compose"
+          files=(-f docker-compose.yml -f compose.override.yml -f compose.saas.yml
+            -f compose.tools.yml -f compose.https.yml)
+          docker compose -p onyx-saas "${files[@]}" config --quiet
+          docker compose -p onyx-saas "${files[@]}" config --format json >"${RUNNER_TEMP}/saas-config.json"
+          # --no-env-resolution keeps the env_file keys in the output.
+          docker compose -p onyx-saas "${files[@]}" config --no-env-resolution --format json \
+            >"${RUNNER_TEMP}/saas-config-env-file.json"
+          docker compose -p onyx-saas "${files[@]}" config --images | sort -u
+      - name: Check the rendered multi-tenant configuration
+        run: |
+          python3 - "${RUNNER_TEMP}/saas-config.json" "${RUNNER_TEMP}/saas-config-env-file.json" \
+            product/deploy/release.env <<'EOF'
+          import json
+          import re
+          import sys
+
+          config = json.load(open(sys.argv[1]))
+          env_file_config = json.load(open(sys.argv[2]))
+          release: dict[str, str] = {}
+          for line in open(sys.argv[3]):
+              line = line.strip()
+              if line and not line.startswith("#") and "=" in line:
+                  key, value = line.split("=", 1)
+                  release[key] = value
+          services = config["services"]
+          failed: list[str] = []
+
+          def check(ok: bool, text: str) -> None:
+              print(("PASS " if ok else "FAIL ") + text)
+              if not ok:
+                  failed.append(text)
+
+          env = services.get("api_server", {}).get("environment") or {}
+          check(env.get("MULTI_TENANT") == "true", "api_server has MULTI_TENANT=true")
+          for name in ("code-interpreter", "ci-gateway", "searxng"):
+              check(name in services, f"service {name} exists")
+          ci = services.get("code-interpreter", {})
+          check("default" not in (ci.get("networks") or {}), "code-interpreter is not on the default network")
+          raw = env_file_config["services"]
+          check("env_file" not in raw.get("code-interpreter", {}), "code-interpreter has no env_file")
+          check("env_file" in raw.get("api_server", {}), "control: api_server keeps its env_file")
+          secrets = {
+              "POSTGRES_PASSWORD", "ENCRYPTION_KEY_SECRET", "USER_AUTH_SECRET",
+              "S3_AWS_SECRET_ACCESS_KEY", "MINIO_ROOT_PASSWORD", "OPENSEARCH_ADMIN_PASSWORD",
+              "FIREWORKS_DEFAULT_API_KEY", "SEARXNG_SECRET",
+          }
+          leaked = sorted(secrets & set(ci.get("environment") or {}))
+          check(not leaked, f"code-interpreter environment has no .env secret keys (found {leaked})")
+
+          pinned = re.compile(r"^[^@\s]+:[^@\s]+@sha256:[0-9a-f]{64}$")
+          # A value that no service renders (the executor image) needs the digest only.
+          digest = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+          images = {k: v for k, v in release.items() if re.match(r"^[A-Z0-9_]+_IMAGE(_[A-Z]+)?$", k)}
+          for key, value in images.items():
+              check(bool(digest.match(value)), f"{key} in release.env is digest pinned")
+
+          def repo(image: str) -> str:
+              return re.split(r"[:@]", image, maxsplit=1)[0]
+
+          allowed: dict[str, set[str]] = {}
+          for value in images.values():
+              allowed.setdefault(repo(value), set()).add(value)
+          for name, service in sorted(services.items()):
+              image = service.get("image") or ""
+              if repo(image) in allowed:
+                  check(image in allowed[repo(image)], f"{name} uses the release.env pin {image}")
+              elif name in ("code-interpreter", "ci-gateway", "searxng"):
+                  check(bool(pinned.match(image)), f"{name} image is tag@sha256 pinned: {image}")
+              else:
+                  print(f"INFO {name} image {image} is not pinned by release.env")
+          check(services.get("api_server", {}).get("image") == release.get("ONYX_BACKEND_IMAGE_CLOUD"),
+                "api_server runs ONYX_BACKEND_IMAGE_CLOUD")
+          check(services.get("web_server", {}).get("image") == release.get("ONYX_WEB_SERVER_IMAGE_CLOUD"),
+                "web_server runs ONYX_WEB_SERVER_IMAGE_CLOUD")
+          if failed:
+              print(f"::error::{len(failed)} multi-tenant render checks failed: {failed}")
+              sys.exit(1)
+          EOF
 
   e2e:
     name: End-to-end

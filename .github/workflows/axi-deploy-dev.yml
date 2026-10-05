@@ -1,12 +1,18 @@
 name: Deploy 22nd X AI dev
 # Deploys main to the development VM after the product checks pass on main.
-# See product/deploy/RUNBOOK.md, section 11.
+# Policy: an automatic deploy deploys only what product/deploy/release.env pins at that commit
+# (image digests, overlays, settings). It never changes the Onyx release: a new ONYX_RELEASE_TAG
+# migrates the database, so it needs a manual run with allow_release_change. The VM takes a
+# backup before a release change. On the multi-tenant stack (onyx-saas) deploy-remote.sh runs
+# "vm-bootstrap.sh saas-update" of the deployed commit; its last line is
+# RESULT=deployed|unchanged|rolled-back|failed and the summary shows it.
+# See product/deploy/RUNBOOK.md, section 11, and docs/product/MULTI-TENANT.md, section 9.
 
 on:
   workflow_dispatch:
     inputs:
       allow_release_change:
-        description: Permit a new Onyx release. Run backup.sh on the VM first.
+        description: Permit a new Onyx release (database migration). The VM takes a backup first.
         type: boolean
         default: false
   # Safe: the job runs only for a successful push run on main of this repository.
@@ -38,8 +44,9 @@ jobs:
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
-    # Image pull, then up to 15 minutes for the health check.
-    timeout-minutes: 60
+    # Wait for the VM lock (up to 20 minutes), image pull, health wait (15 minutes), backfill,
+    # and a backup on a release change.
+    timeout-minutes: 90
     environment: ci-protected
     permissions:
       contents: read
@@ -92,22 +99,54 @@ jobs:
           DEV_SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
           DEV_SSH_KNOWN_HOSTS: ${{ secrets.DEV_SSH_KNOWN_HOSTS }}
         run: |
+          set -euo pipefail
           if [[ ! "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ || ! "${ALLOW_RELEASE_CHANGE}" =~ ^[01]$ ]]; then
             echo "::error::DEPLOY_SHA or ALLOW_RELEASE_CHANGE is not valid."
             exit 1
           fi
-          ssh_dir="${RUNNER_TEMP}/ssh"
-          install -d -m 700 "${ssh_dir}"
-          install -m 600 /dev/null "${ssh_dir}/key"
+          ssh_dir="$(mktemp -d "${RUNNER_TEMP}/onyx-ssh.XXXXXX")"
+          trap 'rm -rf "${ssh_dir}"' EXIT
+          chmod 700 "${ssh_dir}"
+          umask 077
           printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
           printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
-          ssh -i "${ssh_dir}/key" -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
+          log="${RUNNER_TEMP}/deploy.log"
+          # pipefail: the job fails when the script on the VM fails, not only when tee fails.
+          ssh -F /dev/null -i "${ssh_dir}/key" \
+            -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o PreferredAuthentications=publickey \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
             -o ConnectTimeout=30 -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
             -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
             "ALLOW_RELEASE_CHANGE=${ALLOW_RELEASE_CHANGE} bash -s -- ${DEPLOY_SHA}" \
-            <product/deploy/deploy-remote.sh
-          echo "Deployed ${DEPLOY_SHA} to the development VM." >>"${GITHUB_STEP_SUMMARY}"
-      - name: Remove the SSH key
-        if: always()
-        run: rm -rf "${RUNNER_TEMP}/ssh"
+            <product/deploy/deploy-remote.sh 2>&1 | tee "${log}"
+      - name: Write the summary
+        if: always() && steps.secrets.outputs.ready == 'true'
+        run: |
+          log="${RUNNER_TEMP}/deploy.log"
+          result="$(sed -n -E 's/^RESULT=//p' "${log}" 2>/dev/null | tail -n 1)"
+          {
+            echo "## Deploy to the development VM"
+            echo
+            echo "Commit: \`${DEPLOY_SHA}\`. Release change allowed: ${ALLOW_RELEASE_CHANGE}."
+            echo
+            echo "RESULT=${result:-missing}"
+            echo
+            echo "The full log is in the artifact \`deploy-dev-log\`."
+            echo
+            echo '```'
+            tail -n 40 "${log}" 2>/dev/null || echo "no log"
+            echo '```'
+          } >>"${GITHUB_STEP_SUMMARY}"
+          if [[ -z "${result}" ]]; then
+            echo "::warning::The deploy log has no RESULT line."
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v4
+        if: always() && steps.secrets.outputs.ready == 'true'
+        with:
+          name: deploy-dev-log
+          path: ${{ runner.temp }}/deploy.log
+          if-no-files-found: ignore
+          retention-days: 30

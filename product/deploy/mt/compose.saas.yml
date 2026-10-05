@@ -53,6 +53,17 @@ services:
       - FIREWORKS_DEFAULT_DISPLAY_NAME=${FIREWORKS_DEFAULT_DISPLAY_NAME:-22nd X AI model}
       - FIREWORKS_DEFAULT_PROVIDER=${FIREWORKS_DEFAULT_PROVIDER:-fireworks_ai}
       - FIREWORKS_DEFAULT_API_BASE=${FIREWORKS_DEFAULT_API_BASE:-}
+      # Web search of every new company, like the FIREWORKS_DEFAULT_* block (cloud backend
+      # image). saas_prepare writes the searxng values into .env when .env has no
+      # WEB_SEARCH_DEFAULT_PROVIDER yet; secrets/saas.env overrides them (a keyed provider).
+      # Empty values: no web search default.
+      - WEB_SEARCH_DEFAULT_PROVIDER=${WEB_SEARCH_DEFAULT_PROVIDER:-}
+      - WEB_SEARCH_DEFAULT_API_KEY=${WEB_SEARCH_DEFAULT_API_KEY:-}
+      - WEB_SEARCH_DEFAULT_CONFIG=${WEB_SEARCH_DEFAULT_CONFIG:-}
+      - WEB_SEARCH_DEFAULT_DISPLAY_NAME=${WEB_SEARCH_DEFAULT_DISPLAY_NAME:-}
+      # The code interpreter is only reachable through ci-gateway (compose.tools.yml).
+      # Upstream sets this key on api_server only; background reads it from .env (env_file).
+      - CODE_INTERPRETER_BASE_URL=${CODE_INTERPRETER_BASE_URL:-http://ci-gateway:8000}
     depends_on:
       mt_minio_bucket:
         condition: service_completed_successfully
@@ -81,6 +92,11 @@ services:
       - FIREWORKS_DEFAULT_DISPLAY_NAME=${FIREWORKS_DEFAULT_DISPLAY_NAME:-22nd X AI model}
       - FIREWORKS_DEFAULT_PROVIDER=${FIREWORKS_DEFAULT_PROVIDER:-fireworks_ai}
       - FIREWORKS_DEFAULT_API_BASE=${FIREWORKS_DEFAULT_API_BASE:-}
+      # See api_server.
+      - WEB_SEARCH_DEFAULT_PROVIDER=${WEB_SEARCH_DEFAULT_PROVIDER:-}
+      - WEB_SEARCH_DEFAULT_API_KEY=${WEB_SEARCH_DEFAULT_API_KEY:-}
+      - WEB_SEARCH_DEFAULT_CONFIG=${WEB_SEARCH_DEFAULT_CONFIG:-}
+      - WEB_SEARCH_DEFAULT_DISPLAY_NAME=${WEB_SEARCH_DEFAULT_DISPLAY_NAME:-}
 
   web_server:
     environment:

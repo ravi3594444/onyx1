@@ -10,9 +10,16 @@ name: Bootstrap dev VM
 # inventory, cutover, rollback, saas-*: the production multi-tenant stack (project onyx-saas)
 # on the public URL. cutover moves the owner_email account and the other real accounts.
 # saas-journey: customer-journey test; saas-defaults: platform defaults for every company;
-# saas-update: deploy a commit on onyx-saas. See docs/product/MULTI-TENANT.md, sections 6-7.
-# assistant-prompt, chat-check: default assistant prompt and chat checks on the live stack.
-# See product/deploy/RUNBOOK.md.
+# saas-update: deploy a commit on onyx-saas; saas-update-release-change also permits a new
+# Onyx release (the VM takes a backup first). ci-host-setup: the Code Interpreter executor
+# on the host with a rootless daemon; ci-host-setup-main-socket uses the main Docker socket.
+# saas-tools-check: Code Interpreter and Web Search acceptance test. saas-rotate-key-dry-run,
+# then saas-rotate-key: platform key rotation. saas-backup: cold backup of onyx-saas.
+# saas-restore-test: restore the newest backup, or backup_path, into an isolated copy.
+# See docs/product/MULTI-TENANT.md, sections 6-11.
+# assistant-prompt (show), assistant-prompt-set, assistant-prompt-reset, chat-check: default
+# assistant prompt and chat checks on the live stack. See product/deploy/RUNBOOK.md.
+# GitHub allows 10 inputs for workflow_dispatch: a mode is part of the action name.
 
 on:
   workflow_dispatch:
@@ -51,9 +58,23 @@ on:
           - saas-defaults
           - saas-defaults-dry-run
           - saas-update
+          - saas-update-release-change
           - saas-down
+          - ci-host-setup
+          - ci-host-setup-main-socket
+          - saas-tools-check
+          - saas-rotate-key-dry-run
+          - saas-rotate-key
+          - saas-backup
+          - saas-restore-test
           - assistant-prompt
+          - assistant-prompt-set
+          - assistant-prompt-reset
           - chat-check
+      backup_path:
+        description: Backup folder under /srv/backups to restore (saas-restore-test only; empty = newest)
+        type: string
+        default: ""
       web_domain:
         description: Public URL of the stack (install only, for a new .env)
         type: string
@@ -83,11 +104,6 @@ on:
         description: Model id, or list to show the provider's matching models (model only)
         type: string
         default: list
-      assistant_mode:
-        description: Default assistant prompt (assistant-prompt only)
-        type: choice
-        default: show
-        options: [set, reset, show]
       sealed_model_key:
         description: Model key encrypted to the VM inbox key (base64; model only, when the secret MODEL_API_KEY is not set)
         type: string
@@ -125,7 +141,7 @@ jobs:
       MODEL_PROVIDER: ${{ inputs.model_provider }}
       MODEL_NAME: ${{ inputs.model_name }}
       SEALED_MODEL_KEY: ${{ inputs.sealed_model_key }}
-      ASSISTANT_MODE: ${{ inputs.assistant_mode }}
+      BACKUP_PATH: ${{ inputs.backup_path }}
     steps:
       - name: Check the deploy secrets
         env:
@@ -271,13 +287,27 @@ jobs:
             saas-defaults) args="saas-defaults ${GITHUB_SHA}" ;;
             saas-defaults-dry-run) args="saas-defaults ${GITHUB_SHA} dry-run" ;;
             saas-update) args="saas-update ${GITHUB_SHA}" ;;
+            saas-update-release-change) args="saas-update ${GITHUB_SHA} release-change" ;;
             saas-down) args="saas-down ${GITHUB_SHA}" ;;
-            assistant-prompt)
-              if [[ ! "${ASSISTANT_MODE}" =~ ^(set|reset|show)$ ]]; then
-                echo "::error::assistant_mode must be set, reset or show."; exit 1
+            ci-host-setup) args="ci-host-setup ${GITHUB_SHA}" ;;
+            ci-host-setup-main-socket) args="ci-host-setup ${GITHUB_SHA} main-socket" ;;
+            saas-tools-check) args="saas-tools-check ${GITHUB_SHA}" ;;
+            saas-rotate-key-dry-run) args="saas-rotate-key ${GITHUB_SHA} dry-run" ;;
+            saas-rotate-key) args="saas-rotate-key ${GITHUB_SHA}" ;;
+            saas-backup) args="saas-backup ${GITHUB_SHA}" ;;
+            saas-restore-test)
+              args="saas-restore-test ${GITHUB_SHA}"
+              if [[ -n "${BACKUP_PATH}" ]]; then
+                # The value goes into the remote command line, so allow one plain folder name.
+                if [[ ! "${BACKUP_PATH}" =~ ^/srv/backups/[A-Za-z0-9_.-]+$ ]]; then
+                  echo "::error::backup_path must match ^/srv/backups/[A-Za-z0-9_.-]+$."; exit 1
+                fi
+                args+=" ${BACKUP_PATH}"
               fi
-              args="assistant-prompt ${GITHUB_SHA} ${ASSISTANT_MODE}"
               ;;
+            assistant-prompt) args="assistant-prompt ${GITHUB_SHA} show" ;;
+            assistant-prompt-set) args="assistant-prompt ${GITHUB_SHA} set" ;;
+            assistant-prompt-reset) args="assistant-prompt ${GITHUB_SHA} reset" ;;
             chat-check) args="chat-check ${GITHUB_SHA}" ;;
             *) echo "::error::Unknown action ${BOOTSTRAP_ACTION}."; exit 1 ;;
           esac

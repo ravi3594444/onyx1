@@ -16,14 +16,24 @@
 #        vm-bootstrap.sh rollback <full commit SHA>
 #        vm-bootstrap.sh saas-check <full commit SHA> [after-restart] | saas-restart <full commit SHA>
 #        vm-bootstrap.sh saas-journey <full commit SHA> [after-restart]
-#        vm-bootstrap.sh saas-defaults <full commit SHA> [dry-run] | saas-update <full commit SHA>
+#        vm-bootstrap.sh saas-defaults <full commit SHA> [dry-run]
+#        vm-bootstrap.sh saas-update <full commit SHA> [release-change]
 #        vm-bootstrap.sh saas-down <full commit SHA>
+#        vm-bootstrap.sh ci-host-setup <full commit SHA> [main-socket]
+#        vm-bootstrap.sh saas-rotate-key <full commit SHA> [dry-run]
+#        vm-bootstrap.sh saas-backup <full commit SHA> | saas-restore-test <full commit SHA> [backup folder]
+#        vm-bootstrap.sh saas-tools-check <full commit SHA>
 #        vm-bootstrap.sh assistant-prompt <full commit SHA> <set|reset|show> | chat-check <full commit SHA>
 # Layout on the VM: /srv/onyx-src (clone of the fork), /srv/onyx (release files, .env,
-# evidence), /srv/backups, /srv/onyx-mt (multi-tenant test stack), /srv/onyx-saas (multi-tenant
-# production stack after the cutover). See product/deploy/RUNBOOK.md and docs/product/MULTI-TENANT.md.
+# evidence, secrets, the ci-executor.env marker, active-stack), /srv/backups, /srv/onyx-mt
+# (multi-tenant test stack), /srv/onyx-saas (multi-tenant production stack after the cutover,
+# with rollback/ snapshots and deployed.env), /srv/onyx-saas-restore (restore test copy).
+# See product/deploy/RUNBOOK.md, product/deploy/mt/README.md and docs/product/MULTI-TENANT.md.
 # The script never creates a second .env for the live stack, never removes the live volumes
 # and never prints a secret. It needs python3 and curl; both are present on Debian and Ubuntu.
+# Every action except inspect takes the lock /srv/onyx/.vm-ops.lock (vm_lock).
+# The actions run as "<function> 2>&1 | tee <log> || code=$?" (with_evidence), where set -e
+# has no effect: every step of an action checks its own result (|| die, || return 1).
 set -euo pipefail
 
 # VM_BOOTSTRAP_SRV_ROOT replaces /srv only in local tests of this script.
@@ -63,12 +73,15 @@ STEP_CODES=()
 LIVE_STOPPED=0
 # Cookie jar of the admin session in verify.
 ADMIN_JAR=""
+# 1 when saas_model_defaults replaced the platform key in the saas .env in this run.
+PLATFORM_KEY_CHANGED=0
 
 main() {
   # Bash has read the whole script here. Nothing must read the piped script by mistake.
   exec </dev/null
   local action="${1:-}"
   shift || true
+  [[ "${action}" == inspect || -z "${action}" ]] || vm_lock
   case "${action}" in
     inspect) inspect ;;
     install) install_stack "$@" ;;
@@ -93,15 +106,37 @@ main() {
     saas-defaults) saas_defaults_wrapper "$@" ;;
     saas-update) saas_update_wrapper "$@" ;;
     saas-down) saas_down_wrapper "$@" ;;
+    ci-host-setup) ci_host_setup_wrapper "$@" ;;
+    saas-rotate-key) saas_rotate_key_wrapper "$@" ;;
+    saas-backup) saas_backup_wrapper "$@" ;;
+    saas-restore-test) saas_restore_test_wrapper "$@" ;;
+    saas-tools-check) saas_tools_check_wrapper "$@" ;;
     assistant-prompt) assistant_prompt_wrapper "$@" ;;
     chat-check) chat_check_wrapper "$@" ;;
-    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha> | keygen | mt-up <sha> | mt-check <sha> [after-restart] | mt-restart <sha> | mt-down | mt-destroy | inventory <sha> [owner email] | cutover <sha> <email> <owner email> | rollback <sha> | saas-check <sha> [after-restart] | saas-restart <sha> | saas-journey <sha> [after-restart] | saas-defaults <sha> [dry-run] | saas-update <sha> | saas-down <sha> | assistant-prompt <sha> <set|reset|show> | chat-check <sha>" ;;
+    *) die "usage: vm-bootstrap.sh inspect | install <sha> <web domain> | verify <sha> [with-chat] | restart <sha> | https <sha> <email> [staging] | owner <sha> <email> <invite|-> <keep|on|off> | model <sha> <provider> <model|list> | smtp <sha> | keygen | mt-up <sha> | mt-check <sha> [after-restart] | mt-restart <sha> | mt-down | mt-destroy | inventory <sha> [owner email] | cutover <sha> <email> <owner email> | rollback <sha> | saas-check <sha> [after-restart] | saas-restart <sha> | saas-journey <sha> [after-restart] | saas-defaults <sha> [dry-run] | saas-update <sha> [release-change] | saas-down <sha> | ci-host-setup <sha> [main-socket] | saas-rotate-key <sha> [dry-run] | saas-backup <sha> | saas-restore-test <sha> [backup folder] | saas-tools-check <sha> | assistant-prompt <sha> <set|reset|show> | chat-check <sha>" ;;
   esac
 }
 
 die() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+# One action at a time on this VM: flock on VM_LOCK_FILE (fd 8), 20 minutes of patience.
+# VM_OPS_LOCKED=1 means a parent process holds the lock already (it is exported).
+vm_lock() {
+  if [[ "${VM_OPS_LOCKED:-0}" == 1 ]]; then
+    echo "vm lock: held by the parent process."
+    return 0
+  fi
+  if [[ ! -d "${ONYX_DEPLOY_DIR}" || ! -w "${ONYX_DEPLOY_DIR}" ]]; then
+    echo "vm lock: ${ONYX_DEPLOY_DIR} is not writable (before the install action): no lock."
+    return 0
+  fi
+  exec 8>>"${VM_LOCK_FILE}" || die "cannot open ${VM_LOCK_FILE}."
+  flock -w 1200 8 || die "another vm-bootstrap action holds ${VM_LOCK_FILE} (waited 1200 s)."
+  export VM_OPS_LOCKED=1
+  echo "vm lock: ${VM_LOCK_FILE} taken."
 }
 
 section() {
@@ -283,6 +318,7 @@ inspect() {
   show "${COMPOSE_DIR}" list_dir "${COMPOSE_DIR}"
   show "${BACKUP_ROOT}" list_dir "${BACKUP_ROOT}"
   show "${EVIDENCE_ROOT}" ls -la "${EVIDENCE_ROOT}"
+  show "code interpreter host facts" ci_host_facts
   section "inspect complete"
 }
 
@@ -361,11 +397,11 @@ checkout_source() {
   local sha="$1"
   section "source at ${sha}"
   if [[ ! -d "${ONYX_SRC_DIR}/.git" ]]; then
-    git clone --filter=blob:none "${FORK_URL}" "${ONYX_SRC_DIR}"
+    git clone --filter=blob:none "${FORK_URL}" "${ONYX_SRC_DIR}" || return 1
   fi
-  git -C "${ONYX_SRC_DIR}" fetch --quiet origin "${sha}"
-  git -C "${ONYX_SRC_DIR}" checkout --quiet --detach "${sha}"
-  git -C "${ONYX_SRC_DIR}" log -1 --format='%H %cI %s'
+  git -C "${ONYX_SRC_DIR}" fetch --quiet origin "${sha}" || return 1
+  git -C "${ONYX_SRC_DIR}" checkout --quiet --detach "${sha}" || return 1
+  git -C "${ONYX_SRC_DIR}" log -1 --format='%H %cI %s' || return 1
 }
 
 release_value() {
@@ -380,21 +416,34 @@ export_release_files() {
   commit="$(release_value ONYX_RELEASE_COMMIT)"
   [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "ONYX_RELEASE_TAG is not a release tag: ${tag}"
   section "release files ${tag} into ${compose_dir}"
-  git -C "${ONYX_SRC_DIR}" fetch --quiet --no-tags "${UPSTREAM_URL}" "refs/tags/${tag}:refs/tags/${tag}"
+  git -C "${ONYX_SRC_DIR}" fetch --quiet --no-tags "${UPSTREAM_URL}" "refs/tags/${tag}:refs/tags/${tag}" || return 1
   [[ "$(git -C "${ONYX_SRC_DIR}" rev-parse "refs/tags/${tag}^{commit}")" == "${commit}" ]] ||
     die "Tag ${tag} is not commit ${commit}."
-  mkdir -p "${compose_dir}"
-  target="$(cd "${compose_dir}/../.." && pwd)"
-  git -C "${ONYX_SRC_DIR}" archive "${tag}" deployment/docker_compose deployment/data | tar -x -C "${target}"
-  git -C "${ONYX_SRC_DIR}" show "${sha}:product/deploy/compose.override.yml" >"${compose_dir}/compose.override.yml"
+  mkdir -p "${compose_dir}" || return 1
+  target="$(cd "${compose_dir}/../.." && pwd)" || return 1
+  git -C "${ONYX_SRC_DIR}" archive "${tag}" deployment/docker_compose deployment/data | tar -x -C "${target}" || return 1
+  export_overlay "${sha}" product/deploy/compose.override.yml "${compose_dir}" || return 1
   echo "Exported ${tag} (${commit}) and compose.override.yml."
 }
 
-# Copies one compose overlay from the checkout at <sha> into <compose dir>.
+# Copies one file from the checkout at <sha> into <dir> (compose overlays, tool configs).
+# It writes a temporary file first, checks that it is not empty, then moves it into place:
+# a failed git show never leaves an empty or half-written file. The files hold no secret,
+# so mode 644 lets the containers read the mounted configs.
 export_overlay() {
-  local sha="$1" path="$2" compose_dir="$3"
-  git -C "${ONYX_SRC_DIR}" show "${sha}:${path}" >"${compose_dir}/$(basename "${path}")"
-  echo "Exported $(basename "${path}")."
+  local sha="$1" path="$2" dir="$3" name tmp
+  name="$(basename "${path}")"
+  mkdir -p "${dir}" || return 1
+  tmp="$(mktemp "${dir}/.${name}.XXXXXX")" || return 1
+  if git -C "${ONYX_SRC_DIR}" show "${sha}:${path}" >"${tmp}" 2>/dev/null && [[ -s "${tmp}" ]]; then
+    chmod 644 "${tmp}" || { rm -f "${tmp}"; return 1; }
+    mv -f "${tmp}" "${dir}/${name}" || { rm -f "${tmp}"; return 1; }
+    echo "Exported ${name}."
+  else
+    rm -f "${tmp}"
+    echo "ERROR: ${path} is missing or empty at ${sha}." >&2
+    return 1
+  fi
 }
 
 # Reads a key from the live .env, or prints the default.
@@ -1229,10 +1278,10 @@ mt_prepare() {
     sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${MT_DIR}" ||
       die "sudo -n cannot create ${MT_DIR}."
   fi
-  checkout_source "${sha}"
-  export_release_files "${MT_COMPOSE_DIR}" "${sha}"
-  export_overlay "${sha}" product/deploy/mt/compose.saas.yml "${MT_COMPOSE_DIR}"
-  export_overlay "${sha}" product/deploy/mt/compose.mt.yml "${MT_COMPOSE_DIR}"
+  checkout_source "${sha}" || die "The checkout of ${sha} failed."
+  export_release_files "${MT_COMPOSE_DIR}" "${sha}" || die "The export of the release files failed."
+  export_overlay "${sha}" product/deploy/mt/compose.saas.yml "${MT_COMPOSE_DIR}" || die "The export of compose.saas.yml failed."
+  export_overlay "${sha}" product/deploy/mt/compose.mt.yml "${MT_COMPOSE_DIR}" || die "The export of compose.mt.yml failed."
   if [[ -f "${MT_COMPOSE_DIR}/.env" ]]; then
     echo "${MT_COMPOSE_DIR}/.env exists. The script keeps it."
   else
@@ -1384,8 +1433,43 @@ mt_destroy() {
 readonly SAAS_DIR="${SRV_ROOT}/onyx-saas"
 readonly SAAS_PROJECT=onyx-saas
 readonly SAAS_COMPOSE_DIR="${SAAS_DIR}/deployment/docker_compose"
+# compose.tools.yml adds the code interpreter behind its gateway and SearXNG.
 # compose.https.yml comes last: its nginx ports, command and volumes win.
-readonly SAAS_COMPOSE_FILES=(docker-compose.yml compose.override.yml compose.saas.yml compose.https.yml)
+readonly SAAS_COMPOSE_FILES=(docker-compose.yml compose.override.yml compose.saas.yml compose.tools.yml compose.https.yml)
+# The configs that compose.tools.yml mounts, in <compose dir>/tools/ (product/deploy/tools/).
+readonly SAAS_TOOLS_FILES=(ci-gateway.conf searxng-settings.yml)
+# The services of compose.tools.yml. saas-restore-test stops them for the test.
+readonly SAAS_TOOL_SERVICES=(code-interpreter ci-gateway searxng)
+# saas-update keeps the last 5 snapshots of .env and the compose files here.
+readonly SAAS_ROLLBACK_DIR="${SAAS_DIR}/rollback"
+readonly SAAS_ROLLBACK_KEEP=5
+# What runs: the deployed SHA, the release and the image refs (no secrets).
+readonly SAAS_DEPLOYED_FILE="${SAAS_DIR}/deployed.env"
+# Which project serves the public URL: onyx-saas (cutover, saas-update) or onyx (rollback).
+readonly ACTIVE_STACK_FILE="${ONYX_DEPLOY_DIR}/active-stack"
+# ci-host-setup writes the executor daemon marker: DOCKER_SOCK_PATH, EXECUTOR_MODE, EXECUTOR_UID.
+readonly CI_MARKER_FILE="${ONYX_DEPLOY_DIR}/ci-executor.env"
+readonly CI_SANDBOX_USER=ci-sandbox
+readonly CI_CLEANUP_BIN="${ONYX_DEPLOY_DIR}/bin/ci-cleanup.sh"
+# The global cap of all executor containers (the user slice of ci-sandbox, or code-exec.slice).
+readonly CI_CAP=(MemoryMax=3G CPUQuota=200% TasksMax=2048)
+# The default of PYTHON_EXECUTOR_DOCKER_RUN_ARGS in compose.tools.yml; keep both equal.
+readonly CI_EXECUTOR_RUN_ARGS_DEFAULT="--cpus=1 --ulimit nofile=256:256 --env OMP_NUM_THREADS=1 --env OPENBLAS_NUM_THREADS=1 --env MKL_NUM_THREADS=1"
+readonly CI_CGROUP_PARENT_ARG="--cgroup-parent=code-exec.slice"
+# sha256 (hex, one per line) of every platform key that saas_model_defaults replaced.
+readonly KEY_FINGERPRINTS_FILE="${SECRETS_DIR}/platform-key-fingerprints"
+readonly VM_LOCK_FILE="${ONYX_DEPLOY_DIR}/.vm-ops.lock"
+# saas-backup: the newest *-saas backups that stay in BACKUP_ROOT.
+readonly SAAS_BACKUP_KEEP=7
+# saas-restore-test: the copy of the production stack.
+readonly SAAS_RESTORE_DIR="${SRV_ROOT}/onyx-saas-restore"
+readonly SAAS_RESTORE_COMPOSE_DIR="${SAAS_RESTORE_DIR}/deployment/docker_compose"
+readonly SAAS_RESTORE_PROJECT=onyx-saas-restore
+readonly SAAS_RESTORE_URL=http://127.0.0.1:3300
+readonly SAAS_RESTORE_PORT=3300
+readonly SAAS_RESTORE_FILES=(docker-compose.yml compose.override.yml compose.saas.yml compose.restore.yml)
+# MemAvailable that the restore copy needs after the tool services stop: 5 GiB, in kB.
+readonly SAAS_RESTORE_MIN_AVAILABLE_KB=$((5 * 1024 * 1024))
 readonly SAAS_URL="https://${DNS_NAME}"
 readonly SAAS_TAG_FILE="${SAAS_DIR}/saas-tag"
 readonly SAAS_SALT_FILE="${SAAS_DIR}/saas-salt"
@@ -1807,6 +1891,8 @@ cutover() {
   transfer_accounts "${owner}"
   saas_backfill || die "The platform defaults could not be applied to every tenant."
   CUTOVER_LIVE_STOPPED=0
+  saas_write_deployed "${sha}" || echo "WARNING: ${SAAS_DEPLOYED_FILE} could not be written." >&2
+  saas_write_active_stack "${SAAS_PROJECT}" || echo "WARNING: ${ACTIVE_STACK_FILE} could not be written." >&2
   show "file store bucket job" saas_compose logs --no-log-prefix mt_minio_bucket
   saas_report
   section "cutover complete: ${SAAS_PROJECT} serves ${SAAS_URL}"
@@ -1853,7 +1939,7 @@ saas_cloud_backend_image() {
 # Copies the platform model from secrets/model.env into <env file> as FIREWORKS_DEFAULT_*.
 # The cloud backend image reads them when it sets up a company. Key names only in the log.
 saas_model_defaults() {
-  local env_file="$1" file="${SECRETS_DIR}/model.env" key model provider base
+  local env_file="$1" file="${SECRETS_DIR}/model.env" key model provider base old_key
   if [[ -f "${SECRETS_DIR}/model.sealed" ]]; then
     unseal_model_key
   fi
@@ -1870,6 +1956,15 @@ saas_model_defaults() {
     # model.env of the model action before MODEL_NAME existed. The live stack runs this model.
     model="${DEFAULT_PLATFORM_MODEL}"
     echo "MODEL_NAME is not in ${file}; using ${model}."
+  fi
+  # A new key: keep the fingerprint (sha256) of the old one, so that saas-rotate-key finds
+  # the company providers that still hold it. The log never shows a key.
+  old_key="$(stack_env_value "${env_file}" FIREWORKS_DEFAULT_API_KEY)"
+  if [[ -n "${old_key}" && "${old_key}" != "${key}" ]]; then
+    record_key_fingerprint "${old_key}" ||
+      die "The fingerprint of the previous platform key could not be recorded in ${KEY_FINGERPRINTS_FILE}."
+    PLATFORM_KEY_CHANGED=1
+    echo "platform key changed: fingerprint of the previous key recorded"
   fi
   set_env_key FIREWORKS_DEFAULT_API_KEY "${key}" "${env_file}"
   set_env_key FIREWORKS_DEFAULT_MODEL "${model}" "${env_file}"
@@ -1899,37 +1994,77 @@ print(value)
 PY
 }
 
-# Creates the saas folder, exports the release files and the overlays, and writes .env once.
-# Every run pins the domain, the compose files, the cloud images and the platform model.
+# Creates the saas folder, exports the release files, the overlays and the tool configs, and
+# writes .env once. Every run pins the domain, the release, the images, the compose files and
+# profiles, the executor socket, the web search default and the platform model.
+# secrets/saas.env comes last, so its keys win. It needs the marker of ci-host-setup.
 saas_prepare() {
-  local sha="$1" env_file="${SAAS_COMPOSE_DIR}/.env" cloud_image backend_image
+  local sha="$1" env_file="${SAAS_COMPOSE_DIR}/.env" cloud_image backend_image key sock mode
   section "production multi-tenant folder ${SAAS_DIR}"
   if [[ ! -d "${SAAS_DIR}" ]]; then
     sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${SAAS_DIR}" || die "sudo -n cannot create ${SAAS_DIR}."
   fi
-  export_release_files "${SAAS_COMPOSE_DIR}" "${sha}"
-  export_overlay "${sha}" product/deploy/mt/compose.saas.yml "${SAAS_COMPOSE_DIR}"
-  export_overlay "${sha}" product/deploy/compose.https.yml "${SAAS_COMPOSE_DIR}"
+  saas_require_marker
+  sock="$(ci_marker_value DOCKER_SOCK_PATH)"
+  mode="$(ci_marker_value EXECUTOR_MODE)"
+  export_release_files "${SAAS_COMPOSE_DIR}" "${sha}" || die "The export of the release files failed."
+  export_overlay "${sha}" product/deploy/mt/compose.saas.yml "${SAAS_COMPOSE_DIR}" || die "The export of compose.saas.yml failed."
+  export_overlay "${sha}" product/deploy/mt/compose.tools.yml "${SAAS_COMPOSE_DIR}" || die "The export of compose.tools.yml failed."
+  export_overlay "${sha}" product/deploy/compose.https.yml "${SAAS_COMPOSE_DIR}" || die "The export of compose.https.yml failed."
+  for key in "${SAAS_TOOLS_FILES[@]}"; do
+    export_overlay "${sha}" "product/deploy/tools/${key}" "${SAAS_COMPOSE_DIR}/tools" || die "The export of tools/${key} failed."
+  done
   cloud_image="$(release_value ONYX_WEB_SERVER_IMAGE_CLOUD)"
   [[ -n "${cloud_image}" ]] || die "ONYX_WEB_SERVER_IMAGE_CLOUD is missing in release.env."
-  backend_image="$(saas_cloud_backend_image)"
+  backend_image="$(saas_cloud_backend_image)" || die "ONYX_BACKEND_IMAGE_CLOUD is missing in release.env."
+  for key in ONYX_MODEL_SERVER_IMAGE CODE_INTERPRETER_IMAGE PYTHON_EXECUTOR_IMAGE CI_GATEWAY_IMAGE SEARXNG_IMAGE; do
+    [[ -n "$(release_value "${key}")" ]] || die "${key} is empty in release.env."
+  done
   if [[ -f "${env_file}" ]]; then
     echo "${env_file} exists. The script keeps its secrets."
   else
     # New secrets. The live .env is never copied.
-    "${ONYX_SRC_DIR}/product/deploy/make-env.sh" "${SAAS_COMPOSE_DIR}" "${SAAS_URL}"
+    "${ONYX_SRC_DIR}/product/deploy/make-env.sh" "${SAAS_COMPOSE_DIR}" "${SAAS_URL}" || die "make-env.sh failed."
   fi
   if cmp -s "${COMPOSE_DIR}/.env" "${env_file}"; then
     die "${env_file} is a copy of the live .env. Remove it; cutover then writes new secrets."
   fi
-  chmod 600 "${env_file}"
+  chmod 600 "${env_file}" || die "chmod 600 ${env_file} failed."
   stack_env_pin "${env_file}" DOMAIN "${DNS_NAME}"
   stack_env_pin "${env_file}" WEB_DOMAIN "${SAAS_URL}"
-  # The multi-tenant stack needs the web build with NEXT_PUBLIC_CLOUD_ENABLED=true.
+  # The release, the web build with NEXT_PUBLIC_CLOUD_ENABLED=true, the backend build that
+  # gives every new company the platform defaults, the model server and the tool images.
+  stack_env_pin "${env_file}" IMAGE_TAG "$(release_value ONYX_RELEASE_TAG)"
   stack_env_pin "${env_file}" ONYX_WEB_SERVER_IMAGE "${cloud_image}"
-  # The backend build that gives every new company the platform model and knowledge rules.
   stack_env_pin "${env_file}" ONYX_BACKEND_IMAGE "${backend_image}"
-  echo "Set DOMAIN, WEB_DOMAIN, ONYX_WEB_SERVER_IMAGE and ONYX_BACKEND_IMAGE (cloud builds) in ${env_file}."
+  for key in ONYX_MODEL_SERVER_IMAGE CODE_INTERPRETER_IMAGE PYTHON_EXECUTOR_IMAGE CI_GATEWAY_IMAGE SEARXNG_IMAGE; do
+    stack_env_pin "${env_file}" "${key}" "$(release_value "${key}")"
+  done
+  echo "Set DOMAIN, WEB_DOMAIN, IMAGE_TAG, ONYX_WEB_SERVER_IMAGE, ONYX_BACKEND_IMAGE (cloud builds), ONYX_MODEL_SERVER_IMAGE, CODE_INTERPRETER_IMAGE, PYTHON_EXECUTOR_IMAGE, CI_GATEWAY_IMAGE and SEARXNG_IMAGE in ${env_file}."
+  # The tool services (profile code-interpreter), the gateway address and the executor socket.
+  stack_env_pin "${env_file}" COMPOSE_PROFILES "s3-filestore,code-interpreter"
+  stack_env_pin "${env_file}" CODE_INTERPRETER_BASE_URL "http://ci-gateway:8000"
+  stack_env_pin "${env_file}" DOCKER_SOCK_PATH "${sock}"
+  if [[ "${mode}" == main-socket ]]; then
+    ci_env_add_cgroup_parent "${env_file}"
+  else
+    ci_env_drop_cgroup_parent "${env_file}"
+  fi
+  echo "Set COMPOSE_PROFILES=s3-filestore,code-interpreter, CODE_INTERPRETER_BASE_URL=http://ci-gateway:8000 and DOCKER_SOCK_PATH=${sock} (${mode}) in ${env_file}."
+  if [[ -z "$(stack_env_value "${env_file}" SEARXNG_SECRET)" ]]; then
+    stack_env_pin "${env_file}" SEARXNG_SECRET "$(openssl rand -hex 32)"
+    echo "Wrote SEARXNG_SECRET into ${env_file} (value not shown)."
+  fi
+  # The web search default of every new company. An owner-supplied provider in
+  # secrets/saas.env wins: saas_merge_secrets runs last.
+  if ! grep -qE '^WEB_SEARCH_DEFAULT_PROVIDER=' "${env_file}"; then
+    set_env_key WEB_SEARCH_DEFAULT_PROVIDER searxng "${env_file}"
+    set_env_key WEB_SEARCH_DEFAULT_CONFIG '{"searxng_base_url":"http://searxng:8080","num_results":"10"}' "${env_file}"
+    set_env_key WEB_SEARCH_DEFAULT_DISPLAY_NAME "22nd X AI web search" "${env_file}"
+    echo "Set WEB_SEARCH_DEFAULT_PROVIDER=searxng, WEB_SEARCH_DEFAULT_CONFIG and WEB_SEARCH_DEFAULT_DISPLAY_NAME in ${env_file}."
+  else
+    echo "${env_file} has WEB_SEARCH_DEFAULT_PROVIDER already: the web search default stays."
+  fi
   stack_env_pin_compose "${env_file}" "${SAAS_PROJECT}" "${SAAS_COMPOSE_FILES[@]}"
   stack_env_settings "${env_file}"
   saas_model_defaults "${env_file}"
@@ -2001,6 +2136,7 @@ rollback() {
   set_live_url
   wait_health "${LIVE_URL}"
   check_public_url
+  saas_write_active_stack onyx || echo "WARNING: ${ACTIVE_STACK_FILE} could not be written." >&2
   show "docker compose ps (onyx)" live_compose ps
   show "volumes of onyx and ${SAAS_PROJECT}" list_stack_volumes
   section "rollback complete: project onyx serves ${LIVE_URL}"
@@ -2145,32 +2281,358 @@ saas_defaults() {
 }
 
 saas_update_wrapper() {
-  local sha="${1:-}"
+  local sha="${1:-}" mode="${2:-}"
   check_sha "${sha}"
-  with_evidence saas-update saas_update "${sha}"
+  [[ -z "${mode}" || "${mode}" == release-change ]] || die "The second argument must be release-change or empty."
+  with_evidence saas-update saas_update "${sha}" "${mode}"
 }
 
-# Deploys <sha> on the running onyx-saas stack: new release files and overlays, the nginx
-# files, the pinned images and the platform model from model.env. The certificate stays. .env keeps its secrets. up -d replaces the
-# changed containers; the volumes stay. axi-deploy-dev.yml never touches onyx-saas.
+# State of saas_update for on_saas_update_exit.
+SAAS_UPDATE_SNAPSHOT=""
+SAAS_UPDATE_STARTED=0
+SAAS_UPDATE_DONE=0
+
+# Deploys <sha> on the running onyx-saas stack: new release files, overlays and tool configs,
+# the nginx files, the pinned images and the platform model from model.env. The certificate
+# stays, .env keeps its secrets, the volumes stay. Order: checks, snapshot of the files,
+# saas_prepare, executor image, pull, up -d, health, smoke checks, image check, platform
+# defaults, key rotation when the platform key changed, deployed.env and active-stack.
+# A failure after up -d puts the snapshot files back and runs up -d again. A changed Onyx
+# release needs the mode release-change, which makes a backup first. The last line of the
+# output is RESULT=deployed, RESULT=unchanged, RESULT=rolled-back or RESULT=failed.
+# axi-deploy-dev.yml never touches onyx-saas.
 saas_update() {
-  local sha="$1"
-  section "vm-bootstrap saas-update ${sha} $(date -u +%FT%TZ)"
+  local sha="$1" mode="$2" new_tag current_tag unchanged=0 executor_image
+  section "vm-bootstrap saas-update ${sha} $(date -u +%FT%TZ) (mode=${mode:-same-release})"
   docker_setup
   saas_must_serve
-  checkout_source "${sha}"
+  checkout_source "${sha}" || die "The checkout of ${sha} failed. Nothing was changed."
+  saas_require_marker
+  new_tag="$(release_value ONYX_RELEASE_TAG)"
+  current_tag="$(stack_env_value "${SAAS_COMPOSE_DIR}/.env" IMAGE_TAG)"
+  if [[ -n "${current_tag}" && "${current_tag}" != "${new_tag}" ]]; then
+    [[ "${mode}" == release-change ]] ||
+      die "The Onyx release changes from ${current_tag} to ${new_tag}: the new release migrates the database. Run saas-update with release-change; it makes a backup first. Nothing was changed."
+    section "release change ${current_tag} -> ${new_tag}: backup first"
+    saas_backup "${sha}" || die "The backup before the release change failed. Nothing was changed."
+  elif [[ "${mode}" == release-change ]]; then
+    echo "The release stays ${new_tag}: no backup for a release change."
+  fi
+  trap 'on_saas_update_exit' EXIT
+  saas_update_snapshot || die "The rollback snapshot could not be written. Nothing was changed."
+  PLATFORM_KEY_CHANGED=0
   saas_prepare "${sha}"
   saas_copy_https_files "${sha}"
+  if saas_update_unchanged; then
+    unchanged=1
+    echo "The .env, the compose files and the tool configs are equal to the snapshot."
+  fi
+  executor_image="$(stack_env_value "${SAAS_COMPOSE_DIR}/.env" PYTHON_EXECUTOR_IMAGE)"
+  section "executor image on the executor daemon ($(ci_marker_value EXECUTOR_MODE))"
+  executor_docker pull --quiet "${executor_image}" || die "The executor image could not be pulled into the executor daemon."
   section "docker compose -p ${SAAS_PROJECT} pull"
-  saas_compose pull --quiet
+  saas_compose pull --quiet || die "docker compose pull failed."
+  SAAS_UPDATE_STARTED=1
   section "docker compose -p ${SAAS_PROJECT} up -d"
-  saas_compose up -d
+  saas_compose up -d || die "docker compose up -d failed."
   wait_health "${SAAS_URL}" || die "${SAAS_PROJECT} is not healthy at ${SAAS_URL} after the update."
   PUBLIC_URL="${SAAS_URL}"
   check_public_url || die "The public URL checks failed after the update."
-  saas_backfill
+  saas_smoke_checks || die "The smoke checks failed after the update."
+  saas_images_match_pins || die "The running images are not the pinned images."
+  saas_backfill || die "The platform defaults could not be applied to every tenant."
+  if ((PLATFORM_KEY_CHANGED)); then
+    saas_rotate_key || die "The platform key rotation failed."
+  fi
+  saas_write_deployed "${sha}" || die "${SAAS_DEPLOYED_FILE} could not be written."
+  saas_write_active_stack "${SAAS_PROJECT}" || die "${ACTIVE_STACK_FILE} could not be written."
+  SAAS_UPDATE_DONE=1
   saas_report
   section "saas-update complete: ${sha} on ${SAAS_URL}"
+  if ((unchanged)); then
+    echo "RESULT=unchanged"
+  else
+    echo "RESULT=deployed"
+  fi
+}
+
+# After a failure: the snapshot files go back; after up -d the stack starts again from them.
+# The last line is the RESULT.
+on_saas_update_exit() {
+  local code=$?
+  trap - EXIT
+  ((SAAS_UPDATE_DONE == 0)) || return 0
+  ((code != 0)) || code=1
+  if ((SAAS_UPDATE_STARTED)); then
+    echo "saas-update failed (exit ${code}) after up -d: back to the snapshot ${SAAS_UPDATE_SNAPSHOT}." >&2
+    if saas_update_rollback; then
+      echo "RESULT=rolled-back"
+    else
+      echo "ERROR: the rollback failed. Check ${SAAS_COMPOSE_DIR} and ${SAAS_UPDATE_SNAPSHOT} by hand." >&2
+      echo "RESULT=rollback-failed"
+    fi
+  elif [[ -n "${SAAS_UPDATE_SNAPSHOT}" ]]; then
+    echo "saas-update failed (exit ${code}) before up -d: the snapshot files go back. The containers were not changed." >&2
+    saas_update_restore_files || echo "ERROR: the snapshot files could not be put back. See ${SAAS_UPDATE_SNAPSHOT}." >&2
+    echo "RESULT=failed"
+  else
+    echo "RESULT=failed"
+  fi
+  exit "${code}"
+}
+
+# Copies .env (mode 600), the compose files and the tool configs into rollback/<time>/.
+# The newest SAAS_ROLLBACK_KEEP snapshots stay.
+saas_update_snapshot() {
+  local dir file
+  dir="${SAAS_ROLLBACK_DIR}/$(date -u +%Y%m%dT%H%M%SZ)"
+  install -d -m 700 "${SAAS_ROLLBACK_DIR}" "${dir}" "${dir}/tools" || return 1
+  install -m 600 "${SAAS_COMPOSE_DIR}/.env" "${dir}/.env" || return 1
+  for file in "${SAAS_COMPOSE_FILES[@]}"; do
+    [[ -f "${SAAS_COMPOSE_DIR}/${file}" ]] || continue
+    install -m 644 "${SAAS_COMPOSE_DIR}/${file}" "${dir}/${file}" || return 1
+  done
+  for file in "${SAAS_TOOLS_FILES[@]}"; do
+    [[ -f "${SAAS_COMPOSE_DIR}/tools/${file}" ]] || continue
+    install -m 644 "${SAAS_COMPOSE_DIR}/tools/${file}" "${dir}/tools/${file}" || return 1
+  done
+  SAAS_UPDATE_SNAPSHOT="${dir}"
+  echo "Rollback snapshot: ${dir}"
+  find "${SAAS_ROLLBACK_DIR}" -mindepth 1 -maxdepth 1 -type d | sort | head -n "-${SAAS_ROLLBACK_KEEP}" |
+    while IFS= read -r file; do
+      rm -rf "${file}" && echo "Removed the old snapshot ${file}."
+    done
+}
+
+# Puts the snapshot files back into the compose folder.
+saas_update_restore_files() {
+  local dir="${SAAS_UPDATE_SNAPSHOT}" file
+  [[ -n "${dir}" && -f "${dir}/.env" ]] || return 1
+  install -m 600 "${dir}/.env" "${SAAS_COMPOSE_DIR}/.env" || return 1
+  for file in "${SAAS_COMPOSE_FILES[@]}"; do
+    [[ -f "${dir}/${file}" ]] || continue
+    install -m 644 "${dir}/${file}" "${SAAS_COMPOSE_DIR}/${file}" || return 1
+  done
+  for file in "${SAAS_TOOLS_FILES[@]}"; do
+    [[ -f "${dir}/tools/${file}" ]] || continue
+    install -m 644 "${dir}/tools/${file}" "${SAAS_COMPOSE_DIR}/tools/${file}" || return 1
+  done
+  echo "Put the files of ${dir} back into ${SAAS_COMPOSE_DIR}."
+}
+
+# True when .env, the compose files and the tool configs are equal to the snapshot.
+saas_update_unchanged() {
+  local dir="${SAAS_UPDATE_SNAPSHOT}" file
+  [[ -n "${dir}" ]] || return 1
+  cmp -s "${dir}/.env" "${SAAS_COMPOSE_DIR}/.env" || return 1
+  for file in "${SAAS_COMPOSE_FILES[@]}"; do
+    cmp -s "${dir}/${file}" "${SAAS_COMPOSE_DIR}/${file}" || return 1
+  done
+  for file in "${SAAS_TOOLS_FILES[@]}"; do
+    cmp -s "${dir}/tools/${file}" "${SAAS_COMPOSE_DIR}/tools/${file}" || return 1
+  done
+}
+
+# Starts the stack again from the snapshot files, with the compose file list of the
+# snapshot .env. Containers of services that the snapshot does not know go.
+saas_update_rollback() {
+  local files service ids
+  saas_update_restore_files || return 1
+  files="$(stack_env_value "${SAAS_COMPOSE_DIR}/.env" COMPOSE_FILE)"
+  [[ -n "${files}" ]] || files="$(join_colon "${SAAS_COMPOSE_FILES[@]}")"
+  if [[ "${files}" != *compose.tools.yml* ]]; then
+    for service in "${SAAS_TOOL_SERVICES[@]}"; do
+      ids="$(dk ps -aq --filter "label=com.docker.compose.project=${SAAS_PROJECT}" \
+        --filter "label=com.docker.compose.service=${service}")" || return 1
+      [[ -z "${ids}" ]] || xargs -r "${DOCKER_CMD[@]}" rm -f <<<"${ids}" >/dev/null || return 1
+    done
+  fi
+  section "docker compose -p ${SAAS_PROJECT} up -d (snapshot files)"
+  stack_compose "${SAAS_PROJECT}" "${SAAS_COMPOSE_DIR}" "${files}" up -d --remove-orphans || return 1
+  wait_health "${SAAS_URL}" || return 1
+  PUBLIC_URL="${SAAS_URL}"
+  check_public_url || return 1
+}
+
+# Checks that create nothing: the health and auth endpoints, the leave-team guard, the tool
+# services from inside api_server.
+saas_smoke_checks() {
+  local code
+  section "smoke checks (nothing is created)"
+  code="$(http_code "${SAAS_URL}/api/health/ready")"
+  if [[ "${code}" == 200 ]]; then
+    echo "/api/health/ready answers 200."
+  else
+    echo "/api/health/ready answers ${code}; checking /api/health."
+    code="$(http_code "${SAAS_URL}/api/health")"
+    [[ "${code}" == 200 ]] || { echo "ERROR: /api/health answers ${code}, not 200." >&2; return 1; }
+    echo "/api/health answers 200."
+  fi
+  curl -s --max-time 20 "${SAAS_URL}/api/auth/type" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print("auth_type:", data.get("auth_type"), "multi_tenant:", data.get("multi_tenant"))
+sys.exit(0 if data.get("multi_tenant") is True else 1)
+' || { echo "ERROR: /api/auth/type does not report multi_tenant true." >&2; return 1; }
+  code="$(http_code -X POST "${SAAS_URL}/api/tenants/leave-team")"
+  [[ "${code}" == 409 ]] || { echo "ERROR: POST /api/tenants/leave-team answers ${code}, not 409." >&2; return 1; }
+  echo "POST /api/tenants/leave-team answers 409 (leave-team guard)."
+  saas_tool_probes basic
+}
+
+# Probes the tool services from inside api_server with urllib. Mode basic: gateway health,
+# the file listing is forbidden, code-interpreter does not resolve, searxng health.
+# Mode isolation adds /v1/sessions, /docs, /openapi.json and an execute call with a path as
+# file_id, which must be rejected or show no secret name. Response bodies are not printed.
+saas_tool_probes() {
+  local mode="${1:-basic}"
+  section "tool service probes from api_server (${mode})"
+  saas_compose exec -T api_server python - "${mode}" <<'PY'
+import json
+import socket
+import sys
+import urllib.error
+import urllib.request
+
+mode = sys.argv[1]
+failed = []
+
+
+def get(url, timeout=20):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
+
+
+def check(name, ok, detail=""):
+    print(("ok   " if ok else "FAIL ") + name + (": " + detail if detail else ""))
+    if not ok:
+        failed.append(name)
+
+
+status, body = get("http://ci-gateway:8000/health")
+try:
+    data = json.loads(body)
+except ValueError:
+    data = {}
+check("gateway /health status ok", status == 200 and data.get("status") == "ok",
+      f"{status} {data.get('status')} {data.get('message', '')}".strip())
+status, _ = get("http://ci-gateway:8000/v1/files")
+check("gateway GET /v1/files is 403", status == 403, str(status))
+try:
+    socket.getaddrinfo("code-interpreter", 8000)
+    resolves = True
+except socket.gaierror:
+    resolves = False
+check("code-interpreter does not resolve from api_server", not resolves)
+status, _ = get("http://searxng:8080/healthz")
+check("searxng /healthz is 200", status == 200, str(status))
+
+if mode == "isolation":
+    for path in ("/v1/sessions", "/docs", "/openapi.json"):
+        status, _ = get("http://ci-gateway:8000" + path)
+        check(f"gateway GET {path} is 403", status == 403, str(status))
+    payload = {
+        "code": "print(open('env.txt', 'rb').read()[:4000])",
+        "timeout_ms": 30000,
+        "files": [{"path": "env.txt", "file_id": "/proc/1/environ"}],
+    }
+    request = urllib.request.Request(
+        "http://ci-gateway:8000/v1/execute",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            status, body = response.status, response.read()
+    except urllib.error.HTTPError as error:
+        status, body = error.code, error.read()
+    except OSError as error:
+        status, body = 0, repr(error).encode()
+    text = body.decode("utf-8", "replace")
+    names = [
+        "FIREWORKS_DEFAULT_API_KEY", "POSTGRES_PASSWORD", "USER_AUTH_SECRET",
+        "ENCRYPTION_KEY_SECRET", "SEARXNG_SECRET", "S3_AWS_SECRET_ACCESS_KEY",
+        "MINIO_ROOT_PASSWORD", "OPENSEARCH_ADMIN_PASSWORD", "SMTP_PASS", "WEB_SEARCH_DEFAULT_API_KEY",
+    ]
+    leaked = [name for name in names if name in text]
+    check("execute with file_id /proc/1/environ is rejected or shows no secret name",
+          status != 200 or not leaked, f"status {status}, secret names in the output: {leaked}")
+
+if failed:
+    print("probes failed:", ", ".join(failed))
+    sys.exit(1)
+print("all probes passed")
+PY
+}
+
+# The running containers must run the images that .env pins (compose ps --format json).
+saas_images_match_pins() {
+  section "running images against the pins"
+  saas_compose ps --format json | python3 - "${SAAS_COMPOSE_DIR}/.env" <<'PY'
+import json
+import re
+import sys
+
+pins = {}
+for line in open(sys.argv[1]):
+    match = re.match(r"^\s*([A-Z_]+)\s*=\s*(.*)$", line.rstrip("\n"))
+    if match:
+        pins[match.group(1)] = match.group(2).strip().strip("'\"")
+expected = {
+    "api_server": pins.get("ONYX_BACKEND_IMAGE"),
+    "background": pins.get("ONYX_BACKEND_IMAGE"),
+    "web_server": pins.get("ONYX_WEB_SERVER_IMAGE"),
+    "inference_model_server": pins.get("ONYX_MODEL_SERVER_IMAGE"),
+    "indexing_model_server": pins.get("ONYX_MODEL_SERVER_IMAGE"),
+    "code-interpreter": pins.get("CODE_INTERPRETER_IMAGE"),
+    "ci-gateway": pins.get("CI_GATEWAY_IMAGE"),
+    "searxng": pins.get("SEARXNG_IMAGE"),
+}
+raw = sys.stdin.read().strip()
+rows = []
+if raw:
+    try:
+        data = json.loads(raw)
+        rows = data if isinstance(data, list) else [data]
+    except json.JSONDecodeError:
+        rows = [json.loads(line) for line in raw.splitlines() if line.strip()]
+seen = {row.get("Service"): (row.get("Image"), row.get("State")) for row in rows}
+bad = []
+for service, pin in expected.items():
+    image, state = seen.get(service, (None, None))
+    ok = bool(pin) and image == pin and state == "running"
+    print(("ok   " if ok else "FAIL ") + f"{service}: {image} ({state})")
+    if not ok:
+        bad.append(service)
+sys.exit(1 if bad else 0)
+PY
+}
+
+# Writes deployed.env: the SHA, the time, the release and the image refs. No secrets.
+saas_write_deployed() {
+  local sha="$1" env_file="${SAAS_COMPOSE_DIR}/.env" key
+  {
+    echo "DEPLOYED_SHA=${sha}"
+    echo "DEPLOYED_AT=$(date -u +%FT%TZ)"
+    echo "ONYX_RELEASE_TAG=$(release_value ONYX_RELEASE_TAG)"
+    for key in ONYX_BACKEND_IMAGE ONYX_WEB_SERVER_IMAGE ONYX_MODEL_SERVER_IMAGE \
+      CODE_INTERPRETER_IMAGE PYTHON_EXECUTOR_IMAGE CI_GATEWAY_IMAGE SEARXNG_IMAGE; do
+      echo "${key}=$(stack_env_value "${env_file}" "${key}")"
+    done
+    echo "EXECUTOR_MODE=$(ci_marker_value EXECUTOR_MODE)"
+  } >"${SAAS_DEPLOYED_FILE}.tmp" || return 1
+  mv -f "${SAAS_DEPLOYED_FILE}.tmp" "${SAAS_DEPLOYED_FILE}" || return 1
+  echo "Wrote ${SAAS_DEPLOYED_FILE}."
+}
+
+# Records which project serves the public URL.
+saas_write_active_stack() {
+  echo "$1" >"${ACTIVE_STACK_FILE}" || return 1
+  echo "Wrote ${ACTIVE_STACK_FILE}: $1"
 }
 
 saas_down_wrapper() {

@@ -304,4 +304,186 @@ The test accounts are `owner-a-<tag>`, `owner-b-<tag>` and `member-a-<tag>` at `
 first run makes a new tag (`journey-` plus 8 hex characters, in `/srv/onyx-saas/journey-tag`), so
 it creates two new test companies on the production stack. The passwords derive from the salt
 in `/srv/onyx-saas/journey-salt` (mode 600, never printed). `saas-journey-after-restart` and
-`saas-restart` reuse the tag of the last first run.
+`saas-restart` reuse the tag of the last first run. `--no-chat` (after-restart mode) skips the
+chat answers; the restore test of section 11 uses it on a copy without the platform key.
+
+## 8. Code Interpreter and Web Search
+
+Status: configured; the first `saas-tools-check` run on the VM is pending. Line numbers refer
+to `backend/` at v4.8.4.
+
+### What runs
+
+The overlay `product/deploy/mt/compose.tools.yml` adds three services to `onyx-saas`. They are
+in the Compose profile `code-interpreter` (`COMPOSE_PROFILES=s3-filestore,code-interpreter` in
+the saas `.env`). Every image is pinned by digest (`tag@sha256:...`); the `compose-config` job
+of `axi-product-ci.yml` renders this file set and fails on an unpinned image.
+
+| Service | Role |
+| --- | --- |
+| `code-interpreter` | The sandbox API of the upstream Python tool (`CODE_INTERPRETER_IMAGE`). `api_server` and `background` reach it as `CODE_INTERPRETER_BASE_URL=http://ci-gateway:8000` (`compose.saas.yml`). It starts one executor container per run (`PYTHON_EXECUTOR_IMAGE`) through the Docker socket of `ci-host-setup`. Its `env_file` is reset: the secrets of `.env` do not reach it. It is only on the internal network `ci_internal`: no route to the host, the internet or the other services. Staged files live in a 1 GiB tmpfs (mode 0700); `tools/ci-cleanup.sh` removes files older than 30 minutes. |
+| `ci-gateway` | nginx between `api_server` and the sandbox API (`CI_GATEWAY_IMAGE`, `product/deploy/tools/ci-gateway.conf`). The sandbox API has no authentication and one file store for every company, so the gateway passes only the calls of the Onyx client (`code_interpreter_client.py`): `GET /health`, `POST /v1/execute`, `POST /v1/execute/stream`, `POST /v1/files` (upload) and `GET`/`DELETE /v1/files/<uuid>`. Everything else gets 403: the file listing `GET /v1/files`, `/v1/sessions/*` (long-lived executors with bash) and the API description. |
+| `searxng` | Keyless metasearch for the Web Search tool (`SEARXNG_IMAGE`; `product/deploy/tools/searxng-settings.yml` enables the JSON format that the client needs, `searxng_client.py:26-28`). Only the application containers reach it. |
+
+### Executor restrictions and limits
+
+- Each run is one container of the executor image, started by the sandbox API with
+  `--network none`, 1 CPU, 256 open files, 512 MB of memory and a CPU time limit of 60 s
+  (`compose.tools.yml`). It runs as uid 65532, has no Docker socket, no network and none of
+  the stack secrets in its environment. `tools_check.py` step f verifies these four points
+  from inside a run.
+- A run stops after 60 s: Onyx sends `CODE_INTERPRETER_DEFAULT_TIMEOUT_MS` (upstream default
+  60 000 ms, `onyx/configs/app_configs.py:1665`) and the sandbox API caps it at the same value
+  (`MAX_EXEC_TIMEOUT_MS`). The test requires the stop of an endless loop within 90 s. Output
+  is cut at 50 000 characters (`CODE_INTERPRETER_MAX_OUTPUT_LENGTH`). At most 25 chat files
+  and 100 MiB are staged into a run (`CODE_INTERPRETER_MAX_STAGED_FILES` and `_BYTES`,
+  `app_configs.py:1678-1684`).
+- Memory budget next to the stack: sandbox API 3 GiB, all executors together 3 GiB (a
+  systemd slice of the executor daemon), SearXNG 512 MiB, gateway 128 MiB.
+- Generated files are saved as chat files (`python_tool.py:484-497`) and served by
+  `GET /api/chat/file/{id}` to the owner of the chat (`onyx/access/access.py:221-261`). Another
+  company gets 404. Another user of the same company gets what upstream allows (the test
+  records that status as INFO).
+
+### Rootless daemon or main-socket fallback
+
+`ci-host-setup <sha> [main-socket]` (workflow actions `ci-host-setup` and
+`ci-host-setup-main-socket`) prepares the host:
+
+- `rootless` (default): a rootless Docker daemon of the unprivileged host user `ci-sandbox`
+  runs the executor containers. The sandbox API gets that daemon's socket (`DOCKER_SOCK_PATH`
+  in the saas `.env`, from the marker `/srv/onyx/ci-executor.env`). An escape from an
+  executor lands in that user, not in root; it cannot reach the main daemon, the stack
+  containers or the volumes.
+- `main-socket`: the sandbox API gets `/var/run/docker.sock` of the main daemon, as the
+  upstream file does (`docker-compose.yml:576-580`), and every executor runs in the cgroup
+  `code-exec.slice` (`CI_EXECUTOR_RUN_ARGS`). The sandbox API then has root-equivalent
+  access to the host. Use it only when the host cannot run rootless Docker (no user
+  namespaces, no `newuidmap`), and plan the move back. The action log shows the mode in use.
+
+### SearXNG keyless search and its limits
+
+SearXNG sends each query to public engines without an API key (`provider_requires_api_key`,
+`web_search/providers.py:62-67`). Limits: the engines rate-limit or captcha the VM address,
+so a query can return nothing (the test retries once); result quality and freshness vary;
+the client keeps the first `num_results` (default 10) results (`searxng_client.py:41-43`);
+one instance serves every company. There is no per-query cost.
+
+### A keyed provider replaces it
+
+The platform defaults (`product/deploy/backend-patch`, `onyx/axi`) give every company one
+search provider named "22nd X AI web search" from `WEB_SEARCH_DEFAULT_PROVIDER`,
+`WEB_SEARCH_DEFAULT_API_KEY`, `WEB_SEARCH_DEFAULT_CONFIG` and `WEB_SEARCH_DEFAULT_DISPLAY_NAME`
+(`compose.saas.yml`, `api_server` and `background`). `saas_prepare` writes the SearXNG values
+into the saas `.env` when it has no `WEB_SEARCH_DEFAULT_PROVIDER` yet: type `searxng` with the
+internal SearXNG URL. To use a keyed provider, set in `/srv/onyx/secrets/saas.env`:
+`WEB_SEARCH_DEFAULT_PROVIDER` (`serper`, `exa`, `brave`, `tavily` or `google_pse`),
+`WEB_SEARCH_DEFAULT_API_KEY`, and `WEB_SEARCH_DEFAULT_CONFIG` (JSON) when the type needs
+settings, for example `{"search_engine_id": "..."}` for Google PSE (`providers.py:120-128`).
+Then run `saas-update` (or `saas-defaults`): the values of `saas.env` win over the SearXNG
+defaults, and the backfill updates the platform provider of every company and leaves a
+company's own providers alone. The key is stored encrypted for each company; the admin
+listing shows a mask only (`manage/web_search/api.py:82-86`).
+
+### Per-company availability
+
+- Code Interpreter: each company has its own switch (`code_interpreter_server.server_enabled`,
+  default true, `onyx/db/models.py:7086`; `GET`/`PUT /api/admin/code-interpreter`,
+  `manage/code_interpreter/api.py:38-56`). The Python tool is listed only when the switch is
+  on and the sandbox API answers `/health` (`python_tool.py:259-267`; `GET /api/tool` hides
+  unavailable tools, `features/tool/api.py:394-398`).
+- Web Search: the tool is listed only when the company has an active search provider
+  (`web_search_tool.py:141-145`). A company admin can deactivate the platform provider or add
+  own ones (`/api/admin/web-search/search-providers`). Open URL is always listed and uses the
+  built-in crawler; no content provider is active by default.
+- The backfill keeps a company's choice: a switched-off interpreter stays off, an inactive
+  platform provider stays inactive. `tools_check.py` step g records both states for a check
+  after the next backfill.
+
+### No per-company caps
+
+The sandbox API, the executor daemon and SearXNG are shared by all companies. There is no
+per-company quota: the only limits are per run (time, output, staged files) and the host
+resources of the executor daemon. One company can occupy the executors for all others; a run
+waits or fails when the host is full. A rate limit from a public engine affects every company.
+Watch `docker stats` and the sandbox API log. A per-company cap needs new code.
+
+### Acceptance test
+
+`saas-tools-check <sha>` runs `product/test-corpus/tools_check.py` against the public URL
+with the accounts of the last `saas-journey` run and one new company C. Steps a to g are in
+`product/test-corpus/README.md`.
+
+## 9. Automatic deployment
+
+- `axi-deploy-dev.yml` runs on every push to `main` that passed the product checks, and by
+  hand from `main`. On the VM, `product/deploy/deploy-remote.sh` reads `/srv/onyx/active-stack`.
+  With `onyx-saas` it takes the VM lock `/srv/onyx/.vm-ops.lock`, stages `vm-bootstrap.sh` of
+  the deployed commit and runs `saas-update <sha>` detached, with the log streamed to the
+  workflow. With `onyx` the single-tenant path of RUNBOOK.md, section 11, runs. The script
+  stops when both projects run or the marker and the containers disagree, and it never starts
+  project `onyx` while `onyx-saas` is active.
+- Policy: an automatic deploy deploys only what `release.env` and the overlays pin at that
+  commit (image digests, compose overlays, nginx and SearXNG files, settings). It never changes
+  the Onyx release. A new `ONYX_RELEASE_TAG` migrates the database, so it needs a manual run:
+  `axi-deploy-dev.yml` with `allow_release_change`, or `axi-bootstrap-dev.yml` with the
+  action `saas-update-release-change`. `saas-update ... release-change` takes a backup
+  (section 11) before the migration.
+- RESULT line: the last line of the `saas-update` log is `RESULT=deployed|unchanged|rolled-back|failed`.
+  `deployed`: the new containers run and the public URL is healthy. `unchanged`: the commit
+  pins what already runs. `rolled-back`: the new state failed its health check and the
+  previous pins run again. `failed`: the update stopped; read the log. The workflow summary
+  shows the line and the log is an artifact. The job fails for `rolled-back` and `failed`.
+  `/srv/onyx/deploy.log` keeps one line per run; `/srv/onyx-saas/deployed.env` holds
+  `DEPLOYED_SHA`.
+- Rollback of pins: commit the previous digest in `release.env` and push to `main`; the
+  automatic deploy applies it. The script refuses a commit that does not include
+  `DEPLOYED_SHA` (a re-run of an old workflow run); to deploy an older commit on purpose, run
+  `ALLOW_ROLLBACK=1 bash -s -- <sha> </srv/onyx-src/product/deploy/deploy-remote.sh` on the VM.
+- One operation at a time: the GitHub concurrency group `bootstrap-dev` serialises both
+  workflows, and the VM lock serialises the scripts. `VM_OPS_LOCKED=1` tells `vm-bootstrap.sh`
+  that the caller holds the lock.
+
+## 10. Platform key rotation
+
+Every company uses the platform model with the platform key (`FIREWORKS_DEFAULT_API_KEY` in
+the saas `.env`, and the provider row "22nd X AI model" of each company). To rotate it:
+
+1. Create the new key at the provider. Keep the old key valid until step 6.
+2. Store it on the VM: action `model` with the secret `MODEL_API_KEY` (or `sealed_model_key`)
+   writes `/srv/onyx/secrets/model.env` (mode 600). The log shows key names only.
+3. Action `saas-rotate-key-dry-run` (`saas-rotate-key <sha> dry-run`): the log shows what
+   changes (the `.env` key, the containers that restart, the companies whose platform
+   provider gets the new key). Nothing changes yet.
+4. Action `saas-rotate-key`: writes the new key into the saas `.env`,
+   recreates `api_server` and `background`, and updates the platform provider of every
+   company that uses the platform key. A company with its own key is not changed. The API
+   answers nothing for a short time while the containers restart.
+5. Verify: `saas-journey-after-restart` (one chat answer per company) and the api_server log.
+6. Revoke the old key at the provider.
+
+## 11. Backup and restore test
+
+- `saas-backup <sha>`: cold backup of `onyx-saas` into `/srv/backups/<time>-saas`. The
+  action stops the containers (volumes stay), archives the Postgres, OpenSearch, MinIO and
+  file-system volumes, copies the saas `.env` (secrets, mode 600), writes `SHA256SUMS`, then
+  starts the stack again and waits for health. The public URL answers nothing while the
+  archive runs (minutes; it grows with the data). `saas-update ... release-change` takes the
+  same backup before a migration.
+- Retention: the action keeps the newest 7 `*-saas` backups in `/srv/backups` and removes
+  older ones; the log names the kept folders. Not saved: Redis (not durable), the images
+  (pulled again from the digests) and the host setup of `ci-host-setup`. `saas-update` keeps
+  the last 5 snapshots of the saas `.env` and the compose files in `/srv/onyx-saas/rollback/`
+  for its own rollback; they are not a data backup.
+- `saas-restore-test <sha> [backup path]`: restores the newest backup, or the given
+  `/srv/backups/<name>` (workflow input `backup_path`), into the isolated Compose project
+  `onyx-saas-restore` (`/srv/onyx-saas-restore`, `compose.restore.yml`, `127.0.0.1:3300`),
+  without the platform key. It waits for health, runs
+  `saas_journey.py --after-restart --no-chat` with the journey accounts of the backup
+  (identities, workspaces, the masked key, the search separation; no chat answers), then
+  removes the copy and its volumes. Production is not touched. The copy needs 5 GiB of free
+  disk and memory for a second stack; the action stops when the VM lacks them.
+- An off-VM copy is still needed: the backups live on the VM disk. Copy each folder off the
+  VM (`scp` or `rsync` to another machine or object storage) and check
+  `sha256sum -c SHA256SUMS` there. The folder holds the `.env` with the secrets: store it
+  encrypted.

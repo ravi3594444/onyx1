@@ -98,8 +98,8 @@ yet verified. **Not supported** = Not supported in this release.
 
 | Feature | Where in v4.8.4 | Edition | Needs | Status on the VM | Evidence or note |
 | --- | --- | --- | --- | --- | --- |
-| Web search providers | `WebSearchProviderType` in `backend/shared_configs/enums.py:24`: `google_pse`, `serper`, `exa`, `searxng`, `brave`, `tavily`; admin page `/admin/web-search` | CE | API key for all except SearXNG (`provider_requires_api_key` in `backend/onyx/tools/tool_implementations/web_search/providers.py:62`) | Needs credentials | No key supplied. SearXNG needs a self-hosted SearXNG URL instead of a key. |
-| Web content fetch (Open URL) | `WebContentProviderType`: `onyx_web_crawler`, `firecrawl`, `exa`; `backend/onyx/tools/tool_implementations/open_url/` | CE | none for the Onyx crawler; keys for the others | Not verified | Unconfirmed on the VM. |
+| Web search providers | `WebSearchProviderType` in `backend/shared_configs/enums.py:24`: `google_pse`, `serper`, `exa`, `searxng`, `brave`, `tavily`; admin page `/admin/web-search` | CE | API key for all except SearXNG (`provider_requires_api_key` in `backend/onyx/tools/tool_implementations/web_search/providers.py:62`) | Configured on `onyx-saas` (verify run pending) | Every company gets the platform provider "22nd X AI web search" (SearXNG on the VM, no key). A keyed provider replaces it through `secrets/saas.env`. Acceptance test: `product/test-corpus/tools_check.py` (`saas-tools-check`). See `MULTI-TENANT.md`, section 8. The single-tenant stack has no provider. |
+| Web content fetch (Open URL) | `WebContentProviderType`: `onyx_web_crawler`, `firecrawl`, `exa`; `backend/onyx/tools/tool_implementations/open_url/` | CE | none for the Onyx crawler; keys for the others | Configured on `onyx-saas` (verify run pending) | Built-in crawler, no content provider active. `tools_check.py` fetches the cited links. See `MULTI-TENANT.md`, section 8. |
 | Web search API | `POST /web-search/search` in `backend/onyx/server/features/web_search/api.py` | CE | web search provider | Needs credentials | |
 | Deep research | see AI chat | CE | LLM; web search for web sources | Not verified | |
 
@@ -107,7 +107,7 @@ yet verified. **Not supported** = Not supported in this release.
 
 | Feature | Where in v4.8.4 | Edition | Needs | Status on the VM | Evidence or note |
 | --- | --- | --- | --- | --- | --- |
-| Code execution (Python tool) | `backend/onyx/tools/tool_implementations/python/`; `CODE_INTERPRETER_BASE_URL` in `app_configs.py:1661`; compose service `code-interpreter` (`onyxdotapp/code-interpreter:0.4.7`, `docker-compose.prod.yml:494`) | CE | the `code-interpreter` container; it mounts the host Docker socket | Not verified (off) | `product/deploy/compose.override.yml` makes the service opt-in through `COMPOSE_PROFILES` (RUNBOOK line 147). The VM does not run it. |
+| Code execution (Python tool) | `backend/onyx/tools/tool_implementations/python/`; `CODE_INTERPRETER_BASE_URL` in `app_configs.py:1661`; compose service `code-interpreter` (`onyxdotapp/code-interpreter:0.4.7`, `docker-compose.prod.yml:494`) | CE | the `code-interpreter` container and a Docker daemon for the executors | Configured on `onyx-saas` (verify run pending) | On `onyx-saas`, `product/deploy/mt/compose.tools.yml` runs the sandbox API behind `ci-gateway`, with a rootless executor daemon from `ci-host-setup` (main-socket fallback). Acceptance test: `product/test-corpus/tools_check.py` (`saas-tools-check`). See `MULTI-TENANT.md`, section 8. The single-tenant stack keeps it off (`compose.override.yml`). |
 | Bash tool | `backend/onyx/tools/tool_implementations/bash/` | CE | same sandbox | Not verified (off) | Not in `BUILT_IN_TOOL_MAP`; used inside the coding agent. Unconfirmed. |
 | Craft / Build (app and file generation with a coding agent) | `backend/onyx/server/features/build/`, `ENABLE_CRAFT` (default false) in `build/configs.py:72`; `deployment/docker_compose/docker-compose.craft.yml`; pages `/admin/craft/*` | CE | `ENABLE_CRAFT=true`, a sandbox backend (Docker socket or Kubernetes), an LLM | Not verified (off) | Not enabled on the VM. |
 | File reader and memory tools | `backend/onyx/tools/tool_implementations/file_reader/`, `.../memory/` | CE | LLM | Not verified | |
@@ -178,9 +178,11 @@ yet verified. **Not supported** = Not supported in this release.
 1. Chat, citations and the model answers in the update and delete steps: wait for the Fireworks AI
    configuration, then run `chat`, `chat-forced` and `verify-with-chat`. Chat has not passed yet.
 2. Email: supply SMTP (or SendGrid) to send invites, verification and reset mails.
-3. Web search, image and voice: supply a provider key, or run SearXNG for key-less web search.
-4. Code interpreter and Craft: opt in through `COMPOSE_PROFILES` and `ENABLE_CRAFT`. Both need the
-   host Docker socket; decide this before enabling.
+3. Web search: configured on `onyx-saas` with SearXNG (`MULTI-TENANT.md`, section 8); the
+   `saas-tools-check` run is pending. Image and voice: supply a provider key.
+4. Code interpreter: configured on `onyx-saas` behind `ci-gateway` with a rootless executor
+   daemon; the `saas-tools-check` run is pending. Craft: still off (`ENABLE_CRAFT`); it needs
+   a Docker socket, decide this before enabling.
 5. Enterprise rows: a Business or Enterprise license plus `ENABLE_PAID_ENTERPRISE_EDITION_FEATURES=true`.
 6. Connectors other than File, document sets, agents, MCP client and OpenAPI tools: present in the
    code, not yet verified on the VM.

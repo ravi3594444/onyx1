@@ -40,6 +40,7 @@ from onyx.tools.tool_implementations.web_search.providers import (
     build_search_provider_from_config,
 )
 from onyx.utils.logger import setup_logger
+from onyx.utils.variable_functionality import global_version
 from shared_configs.contextvars import CURRENT_TENANT_ID_CONTEXTVAR
 from shared_configs.enums import WebSearchProviderType
 
@@ -99,7 +100,13 @@ document only for a statement that this document supports.
 
 LlmOutcome = Literal["created", "linked", "kept", "skipped_no_key"]
 InstructionsOutcome = Literal["set", "kept"]
-WebSearchOutcome = Literal["created", "kept", "kept_marker", "skipped_not_configured"]
+WebSearchOutcome = Literal[
+    "created",
+    "kept",
+    "kept_marker",
+    "skipped_not_configured",
+    "skipped_no_encryption",
+]
 CodeInterpreterOutcome = Literal["enabled", "disabled_kept", "seeded"]
 
 T = TypeVar("T")
@@ -295,6 +302,15 @@ def _apply_web_search(db_session: Session, dry_run: bool) -> WebSearchOutcome:
     settings = _web_search_settings()
     if settings is None:
         return "skipped_not_configured"
+    if settings.api_key is not None and not global_version.is_ee_version():
+        # Only the Enterprise build encrypts stored keys. Write nothing, not even
+        # the marker: the step runs again once encryption is active.
+        logger.warning(
+            "Platform web search skipped for tenant %s: Enterprise Edition is not "
+            "active, the key would be stored in clear",
+            CURRENT_TENANT_ID_CONTEXTVAR.get(),
+        )
+        return "skipped_no_encryption"
     if db_session.get(KVStore, WEB_SEARCH_MARKER_KEY) is not None:
         return "kept_marker"
     if fetch_web_search_providers(db_session):
@@ -347,11 +363,14 @@ def _run_step(
         return apply()
     except Exception as e:
         db_session.rollback()
-        failures.append(f"{step} ({safe_error_text(e)})")
-        logger.exception(
-            "Platform defaults step %s failed for tenant %s",
+        text = safe_error_text(e)
+        failures.append(f"{step} ({text})")
+        # No exc_info: a SQLAlchemy traceback carries the statement parameters.
+        logger.error(
+            "Platform defaults step %s failed for tenant %s: %s",
             step,
             CURRENT_TENANT_ID_CONTEXTVAR.get(),
+            text,
         )
         return None
 

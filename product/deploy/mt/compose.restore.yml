@@ -1,0 +1,104 @@
+# 22nd X AI restore-test overlay for a copy of the PRODUCTION multi-tenant stack.
+# vm-bootstrap.sh saas-restore-test restores the newest *-saas backup into
+# /srv/onyx-saas-restore and runs it as project onyx-saas-restore with:
+#   COMPOSE_FILE=docker-compose.yml:compose.override.yml:compose.saas.yml:compose.restore.yml
+#   COMPOSE_PROFILES=s3-filestore
+# The copy answers on 127.0.0.1:3300 only, sends no email, calls no platform model and has
+# no tools: the services below with the profile "restore-disabled" are never created.
+# restore.sh starts nginx and the services that it needs; "background" stays off.
+# The memory limits are the ones of compose.mt.yml. The restore test needs 5 GiB free.
+
+# For reading; the -p of vm-bootstrap.sh and COMPOSE_PROJECT_NAME in .env win.
+name: onyx-saas-restore
+
+services:
+  api_server:
+    environment:
+      # No email from the copy.
+      - SMTP_SERVER=
+      - SMTP_USER=
+      - SMTP_PASS=
+      - EMAIL_FROM=
+      - SENDGRID_API_KEY=
+      - ENABLE_EMAIL_INVITES=false
+      # No platform defaults for new companies on the copy.
+      - FIREWORKS_DEFAULT_API_KEY=
+      - WEB_SEARCH_DEFAULT_PROVIDER=
+      - WEB_SEARCH_DEFAULT_API_KEY=
+      - WEB_SEARCH_DEFAULT_CONFIG=
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_API_SERVER_MEM_LIMIT:-2g}"
+
+  background:
+    # Not created: it runs the connector syncs and the bots with the restored credentials.
+    profiles: ["restore-disabled"]
+    environment:
+      - SMTP_SERVER=
+      - SMTP_USER=
+      - SMTP_PASS=
+      - EMAIL_FROM=
+      - SENDGRID_API_KEY=
+      - ENABLE_EMAIL_INVITES=false
+      - FIREWORKS_DEFAULT_API_KEY=
+      - WEB_SEARCH_DEFAULT_PROVIDER=
+      - WEB_SEARCH_DEFAULT_API_KEY=
+      - WEB_SEARCH_DEFAULT_CONFIG=
+      - CELERY_WORKER_DOCPROCESSING_CONCURRENCY=${MT_DOCPROCESSING_CONCURRENCY:-2}
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_BACKGROUND_MEM_LIMIT:-4g}"
+
+  web_server:
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_WEB_SERVER_MEM_LIMIT:-1g}"
+
+  inference_model_server:
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_MODEL_SERVER_MEM_LIMIT:-3g}"
+
+  indexing_model_server:
+    # Not created: nothing indexes on the copy.
+    profiles: ["restore-disabled"]
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_MODEL_SERVER_MEM_LIMIT:-3g}"
+
+  opensearch:
+    environment:
+      # Upstream fixes the heap at 2g. Compose merges environment by key.
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_OPENSEARCH_MEM_LIMIT:-2g}"
+
+  relational_db:
+    deploy:
+      resources:
+        limits:
+          memory: "${MT_RELATIONAL_DB_MEM_LIMIT:-2g}"
+
+  nginx:
+    # Loopback only. The production stack keeps 80 and 443.
+    ports: !override
+      - "127.0.0.1:3300:80"
+
+  # The tool services of compose.tools.yml are not in the file list of the copy. The
+  # upstream code-interpreter service is; the extra profile keeps it off (compose joins
+  # the profile lists, and none of them is active).
+  code-interpreter:
+    profiles: ["restore-disabled"]
+  ci-gateway:
+    profiles: ["restore-disabled"]
+    image: ${CI_GATEWAY_IMAGE:-nginx:1.25.5-alpine}
+  searxng:
+    profiles: ["restore-disabled"]
+    image: ${SEARXNG_IMAGE:-searxng/searxng}

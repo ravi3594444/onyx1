@@ -1,0 +1,52 @@
+# SearXNG settings of the production multi-tenant stack (service searxng in
+# compose.tools.yml). vm-bootstrap.sh saas_prepare copies this file to
+# deployment/docker_compose/tools/ and compose.tools.yml mounts it read-only at
+# /etc/searxng/settings.yml. The container never reaches the public URL: api_server calls
+# http://searxng:8080 on the Docker network (WEB_SEARCH_DEFAULT_CONFIG).
+#
+# The default settings of the image apply, except for the keys below
+# (https://docs.searxng.org/admin/settings/settings.html, use_default_settings).
+# The secret key comes from the environment: SEARXNG_SECRET overwrites server.secret_key.
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+      - brave
+      - duckduckgo
+      - mojeek
+      - wikipedia
+
+general:
+  instance_name: "22nd X AI web search"
+  debug: false
+  enable_metrics: false
+
+search:
+  # 0 none, 1 moderate, 2 strict.
+  safe_search: 1
+  # Onyx reads the JSON format.
+  formats:
+    - html
+    - json
+
+server:
+  # One client (api_server) on a private network: no rate limiter, no public-instance
+  # protections, no image proxy.
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+valkey:
+  url: false
+
+outgoing:
+  request_timeout: 4.0
+  max_request_timeout: 8.0
+
+# bing is disabled and mojeek is inactive in the default settings. The entries merge by
+# name into the defaults.
+engines:
+  - name: bing
+    disabled: false
+  - name: mojeek
+    inactive: false

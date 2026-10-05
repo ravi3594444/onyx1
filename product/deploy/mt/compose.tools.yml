@@ -1,0 +1,140 @@
+# 22nd X AI tools overlay for the PRODUCTION multi-tenant stack (project onyx-saas) of the
+# Onyx v4.8.4 Docker Compose deployment: the code interpreter (Python sandbox) behind a
+# gateway, and SearXNG for the web search of every company. vm-bootstrap.sh saas_prepare
+# copies this file and the two configs of product/deploy/tools/ into
+# deployment/docker_compose/{,tools/} and runs:
+#   docker compose -p onyx-saas -f docker-compose.yml -f compose.override.yml \
+#     -f compose.saas.yml -f compose.tools.yml -f compose.https.yml ...
+# The TEST stack (onyx-mt) and the single-tenant stack do not use it. See README.md here.
+#
+# All three services are in the profile "code-interpreter" (compose.override.yml puts the
+# upstream code-interpreter service there; axi-product-ci.yml checks that the default render
+# has no code-interpreter). saas_prepare pins COMPOSE_PROFILES=s3-filestore,code-interpreter.
+#
+# Memory budget next to onyx-saas: code interpreter API 3g here, the executor daemon 3G
+# (ci-host-setup, systemd slice), searxng 512m, ci-gateway 128m.
+
+networks:
+  # No route to the host, the internet or the other services: only the gateway and the
+  # code interpreter are on it.
+  ci_internal:
+    internal: true
+
+services:
+  code-interpreter:
+    # Pinned by digest in product/deploy/release.env; saas_prepare writes it into .env.
+    image: ${CODE_INTERPRETER_IMAGE:?set CODE_INTERPRETER_IMAGE in .env (vm-bootstrap.sh saas_prepare pins it from release.env)}
+    # Upstream gives the service the whole .env (every secret of the stack). This service
+    # gets an explicit environment only.
+    env_file: !reset []
+    environment:
+      EXECUTOR_BACKEND: docker
+      # The executor image (digest). ci-host-setup pre-pulls it into the executor daemon.
+      PYTHON_EXECUTOR_DOCKER_IMAGE: ${PYTHON_EXECUTOR_IMAGE:?set PYTHON_EXECUTOR_IMAGE in .env (saas_prepare pins it from release.env)}
+      # Executors run without network (docker run --network none).
+      PYTHON_EXECUTOR_DOCKER_NETWORK: none
+      # Extra docker run flags of every executor (shlex split by the API). The default caps
+      # one run at 1 CPU, 256 open files and single-threaded BLAS. ci-host-setup main-socket
+      # appends --cgroup-parent=code-exec.slice through CI_EXECUTOR_RUN_ARGS in .env.
+      PYTHON_EXECUTOR_DOCKER_RUN_ARGS: "${CI_EXECUTOR_RUN_ARGS:---cpus=1 --ulimit nofile=256:256 --env OMP_NUM_THREADS=1 --env OPENBLAS_NUM_THREADS=1 --env MKL_NUM_THREADS=1}"
+      # Onyx sends timeout_ms=60000; a lower maximum makes the API answer 422.
+      MAX_EXEC_TIMEOUT_MS: "60000"
+      # CPU time rlimit of one run, seconds (code default 5).
+      CPU_TIME_LIMIT_SEC: "60"
+      # Memory of one executor container (code default 256).
+      MEMORY_LIMIT_MB: "512"
+      MAX_OUTPUT_BYTES: "1000000"
+      MAX_FILE_SIZE_MB: "100"
+      LOG_LEVEL: INFO
+    networks:
+      - ci_internal
+    volumes:
+      # Upstream mounts ${DOCKER_SOCK_PATH:-/var/run/docker.sock} as /var/run/docker.sock.
+      # saas_prepare pins DOCKER_SOCK_PATH from /srv/onyx/ci-executor.env (ci-host-setup).
+      # The staged files live in memory, readable by root only, and ci-cleanup.sh deletes
+      # files older than 30 minutes.
+      - type: tmpfs
+        target: /tmp/code-interpreter-files
+        tmpfs:
+          size: 1g
+          mode: 0700
+    deploy:
+      resources:
+        limits:
+          memory: "${CI_API_MEM_LIMIT:-3g}"
+
+  # The gateway: the only client of the code interpreter API. api_server calls
+  # http://ci-gateway:8000 (CODE_INTERPRETER_BASE_URL). See tools/ci-gateway.conf.
+  ci-gateway:
+    # The nginx image of the upstream nginx service (same tag), pinned in release.env.
+    image: ${CI_GATEWAY_IMAGE:?set CI_GATEWAY_IMAGE in .env (saas_prepare pins it from release.env)}
+    profiles: ["code-interpreter"]
+    restart: unless-stopped
+    networks:
+      - default
+      - ci_internal
+    volumes:
+      - ./tools/ci-gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
+    healthcheck:
+      # Through the proxy: the code interpreter must answer status ok.
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:8000/health | grep -q '\"status\":\"ok\"'",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # The code interpreter pulls the executor image at its first start.
+      start_period: 150s
+
+  # Web search of every company (WEB_SEARCH_DEFAULT_PROVIDER=searxng in compose.saas.yml).
+  # Same profile as the code interpreter: the single-tenant render stays without it.
+  searxng:
+    image: ${SEARXNG_IMAGE:?set SEARXNG_IMAGE in .env (saas_prepare pins it from release.env)}
+    profiles: ["code-interpreter"]
+    restart: unless-stopped
+    environment:
+      # Overwrites server.secret_key. saas_prepare generates it once (never printed).
+      - SEARXNG_SECRET=${SEARXNG_SECRET:?set SEARXNG_SECRET in .env (openssl rand -hex 32)}
+      - SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
+      # The image default "::" needs IPv6 on the network.
+      - GRANIAN_HOST=0.0.0.0
+      # The entrypoint would chown the config folder; the settings file is read-only.
+      - FORCE_OWNERSHIP=false
+    volumes:
+      - ./tools/searxng-settings.yml:/etc/searxng/settings.yml:ro
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/usr/local/searxng/.venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

@@ -122,12 +122,47 @@ MT_PASSWORD_SALT=... python3 product/test-corpus/saas_journey.py \
 model, the masked key, the 403 of member A, the chat session separation, a new "OK" chat, member
 A's Q1 answer with its citation, the search separation and owner B's Q1 answer.
 
+`--no-chat` (only with `--after-restart`) skips the three chat answers and prints one `SKIP` line
+for each. The restore test (`saas-restore-test`) uses it: the restored copy has no platform key,
+so no model answers there. The read checks still run.
+
 `MODEL_API_KEY` (optional) is the platform key. The script never sends it and refuses a request
 body that holds it. It checks that no response body of the whole run holds the key. Without it,
 the run prints `SKIP the platform key appears in no response` and relies on the masked
 `api_key` field. The log never shows an `api_key` value: the v4.8.4 mask keeps 8 characters.
 
 The state file keeps the tag, the emails, the workspaces and the ids for `--after-restart`.
+
+## Code Interpreter and Web Search test (multi-tenant stack)
+
+`tools_check.py` is the acceptance test for the Python tool and the Web Search tool on `onyx-saas`
+(`docs/product/MULTI-TENANT.md`, section 8). It reuses the accounts of the last `saas_journey.py`
+run (owner A, member A, owner B from `--state`) and signs up one new company C with a new tag. It
+configures no provider and no prompt. It only switches company C's Code Interpreter and web search
+provider off and on again, and records both states.
+
+```bash
+MT_PASSWORD_SALT=... python3 product/test-corpus/tools_check.py \
+  --base-url https://my-knowledge.duckdns.org --state journey_state.json \
+  --tag tools-1a2b3c4d [--email-domain example.com] [--record tools_state.json]
+```
+
+`vm-bootstrap.sh saas-tools-check <sha>` runs it on the VM (workflow action `saas-tools-check`).
+The output follows "Pass and fail" above, plus `INFO <name>: <json>` lines for evidence that is not
+a check. Steps:
+
+| Step | Checks |
+| --- | --- |
+| a | Owner C signs up (`owner-c-<tag>@example.com`) and is admin of a new company. Owners A, B and C: `GET /api/admin/code-interpreter` shows `enabled: true`, `GET /api/admin/code-interpreter/health` shows `connected: true`, `GET /api/tool` lists `PythonTool`, `WebSearchTool` and `OpenURLTool`, `GET /api/admin/web-search/search-providers` shows exactly one active provider "22nd X AI web search" with no visible key, and no content provider is active. |
+| b | Member A uploads a generated CSV (12 rows, total 4,321.50, mean 360.125; computed in the test) with `POST /api/user/projects/file/upload` and asks for the total and the mean with `forced_tool_id` = `PythonTool`. The stream must hold `python_tool_start`, no error, and the answer both numbers (2 or 3 decimals, with or without a thousands separator). |
+| c | Member A asks for `chart.png` and `result.csv`. `python_tool_delta.file_ids` must be non-empty. Member A downloads each file through `GET /api/chat/file/{id}`: one PNG (magic bytes) and one CSV with the region names. Owner B gets 403 or 404. Owner A's status (same company) is printed as `INFO`. |
+| d | Owner B and owner C ask for the population of Iceland with `forced_tool_id` = `WebSearchTool`. The stream must hold `search_tool_start` with `is_internet_search: true` and `search_tool_documents_delta` documents with http(s) links. Every `[n]` in the answer must map to a `citation_info` packet and a document. The test fetches each cited link (15 s, browser user agent, redirects followed); at least one must answer below 400. One retry when no document comes back. |
+| e | Owner B's recent files and a search for the CSV marker show nothing of company A; owner B cannot read member A's chat session. Owner C generates a small file; owner A and member A get 403 or 404 for it. |
+| f | Sandbox probes in company C, printed as `INFO` and checked: uid 65532, no `/var/run/docker.sock`, no environment name with `POSTGRES`, `S3_`, `FIREWORKS` or `SMTP`, no TCP connection to `1.1.1.1:80`. Then `while True: pass` must end within 90 s (time from `python_tool_start` to the next packet of another kind). |
+| g | Owner C switches the Code Interpreter off (`PUT /api/admin/code-interpreter`) and deactivates the provider (`POST .../search-providers/{id}/deactivate`); the tool list hides both tools. The test prints an `INFO` line for the operator: the next platform defaults run must keep both choices. Then it switches both on again and verifies. |
+
+`--record` (default `tools_state.json`) gets the ids, the chat sessions, the recorded states of
+step g and the probe results. The test accounts are synthetic; the run prints their emails.
 
 ## UI evidence
 

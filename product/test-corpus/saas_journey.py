@@ -5,7 +5,7 @@ Prints one PASS or FAIL line for each check and exits with 0 only if all pass.
 
 Usage:
   MT_PASSWORD_SALT=... python3 saas_journey.py --base-url URL --tag TAG \\
-      --state journey_state.json [--email-domain example.com] [--after-restart]
+      --state journey_state.json [--email-domain example.com] [--after-restart] [--no-chat]
 
 The test acts like customers do. It never configures an LLM provider, a default
 model or the default assistant: the platform image must supply them to every new
@@ -19,6 +19,8 @@ company. The first run:
   6. asks Q1 to Q5 as member A and Q5 in owner A's private project;
   7. checks the separation of the two companies.
 A run with --after-restart logs in with the same accounts and repeats the read checks.
+With --no-chat (after-restart mode only) it skips the two chat answers: the restore test
+runs it on a copy of the stack without the platform key, so no model answers there.
 
 MODEL_API_KEY (optional) is the platform key. The test never sends it. It only checks
 that no response body contains it. Without it, the test checks that the api_key field
@@ -650,7 +652,11 @@ def first_run(
 
 
 def after_restart_run(
-    checks: Checks, base_url: str, accounts: Accounts, state: dict[str, Any]
+    checks: Checks,
+    base_url: str,
+    accounts: Accounts,
+    state: dict[str, Any],
+    no_chat: bool = False,
 ) -> None:
     expect(
         state.get("tag") == accounts.tag,
@@ -679,10 +685,19 @@ def after_restart_run(
     check_key_masked(checks, sessions["owner-a"], suffix)
     check_member_llm_admin(checks, sessions["member-a"], state, suffix)
     check_chat(checks, sessions, state, suffix)
+    check_search_separation(checks, sessions, state, suffix)
+    if no_chat:
+        # A restored copy has no platform key, so no model answers there.
+        for name in (
+            f"owner A chat answers {OK_PROMPT!r} with the platform model{suffix}",
+            f"chat Q1 as member A{suffix}",
+            f"owner B chat Q1 says that its documents lack the information{suffix}",
+        ):
+            checks.skip(name, "--no-chat: no model answer")
+        return
     check_immediate_chat(checks, sessions["owner-a"], suffix)
     result = ask(sessions["member-a"], QUESTIONS["Q1"])
     check_answer(checks, f"chat Q1 as member A{suffix}", result, ANSWERS["Q1"])
-    check_search_separation(checks, sessions, state, suffix)
     check_owner_b_chat(checks, sessions["owner-b"], suffix)
 
 
@@ -699,7 +714,14 @@ def main() -> int:
         action="store_true",
         help="log in with the accounts of the state file and repeat the read checks",
     )
+    parser.add_argument(
+        "--no-chat",
+        action="store_true",
+        help="with --after-restart: skip the chat answers (a copy without the platform key)",
+    )
     args = parser.parse_args()
+    if args.no_chat and not args.after_restart:
+        parser.error("--no-chat needs --after-restart")
     if urllib.parse.urlparse(args.base_url).scheme not in ("http", "https"):
         parser.error(f"--base-url must use http or https: {args.base_url}")
     if not TAG_PATTERN.match(args.tag):
@@ -719,7 +741,7 @@ def main() -> int:
     stopped = f"{step} runs to the end"
     try:
         if args.after_restart:
-            after_restart_run(checks, args.base_url, accounts, state)
+            after_restart_run(checks, args.base_url, accounts, state, args.no_chat)
         else:
             first_run(checks, args.base_url, accounts, state)
     except SystemExit as error:
