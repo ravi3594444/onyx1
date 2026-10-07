@@ -211,7 +211,14 @@ jobs:
                 f"code-interpreter is only on internal networks ({sorted(ci.get('networks') or {})})")
           raw = env_file_config["services"]
           check("env_file" not in raw.get("code-interpreter", {}), "code-interpreter has no env_file")
-          check("env_file" in raw.get("api_server", {}), "control: api_server keeps its env_file")
+          # The resolved render inlines .env into "environment". Some Compose versions drop
+          # the env_file key from the raw render, so the control checks the resolved values.
+          ci_env = ci.get("environment") or {}
+          api_env = services["api_server"].get("environment") or {}
+          check("POSTGRES_PASSWORD" in api_env, "control: api_server gets the .env secrets")
+          check(not any(k in ci_env for k in ("POSTGRES_PASSWORD", "FIREWORKS_DEFAULT_API_KEY",
+                                              "S3_AWS_SECRET_ACCESS_KEY", "USER_AUTH_SECRET")),
+                "code-interpreter gets no .env secrets")
           secrets = {
               "POSTGRES_PASSWORD", "ENCRYPTION_KEY_SECRET", "USER_AUTH_SECRET",
               "S3_AWS_SECRET_ACCESS_KEY", "MINIO_ROOT_PASSWORD", "OPENSEARCH_ADMIN_PASSWORD",
