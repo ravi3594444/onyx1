@@ -150,7 +150,7 @@ def info(name: str, detail: Any = None) -> None:
 
 
 def utc_now() -> str:
-    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.datetime.now(datetime.timezone.utc)  # noqa: UP017 (VM Python 3.10).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------------------------------------------------------------- numbers and files
