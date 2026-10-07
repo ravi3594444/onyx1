@@ -2488,7 +2488,38 @@ sys.exit(0 if data.get("multi_tenant") is True else 1)
   code="$(http_code -X POST "${SAAS_URL}/api/tenants/leave-team")"
   [[ "${code}" == 409 ]] || { echo "ERROR: POST /api/tenants/leave-team answers ${code}, not 409." >&2; return 1; }
   echo "POST /api/tenants/leave-team answers 409 (leave-team guard)."
+  saas_wait_tools || return 1
   saas_tool_probes basic
+}
+
+# Waits until code-interpreter, ci-gateway and searxng report healthy (up to 5 minutes).
+# On a timeout it prints their state and the last log lines (the services log no secrets).
+saas_wait_tools() {
+  local service id state deadline=$((SECONDS + 300)) pending
+  section "tool services health"
+  while :; do
+    pending=""
+    for service in code-interpreter ci-gateway searxng; do
+      id="$(saas_compose ps -q "${service}" 2>/dev/null | head -n 1)"
+      state="missing"
+      [[ -z "${id}" ]] || state="$(dk inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${id}" 2>/dev/null || echo unknown)"
+      [[ "${state}" == healthy ]] || pending+=" ${service}=${state}"
+    done
+    if [[ -z "${pending}" ]]; then
+      echo "code-interpreter, ci-gateway and searxng are healthy."
+      return 0
+    fi
+    if ((SECONDS >= deadline)); then
+      echo "ERROR: tool services not healthy after 5 minutes:${pending}" >&2
+      saas_compose ps -a code-interpreter ci-gateway searxng || true
+      for service in code-interpreter ci-gateway searxng; do
+        echo "--- last log lines of ${service}"
+        saas_compose logs --no-color --tail 40 "${service}" 2>&1 || true
+      done
+      return 1
+    fi
+    sleep 10
+  done
 }
 
 # Probes the tool services from inside api_server with urllib. Mode basic: gateway health,
@@ -2515,6 +2546,9 @@ def get(url, timeout=20):
             return response.status, response.read()
     except urllib.error.HTTPError as error:
         return error.code, error.read()
+    except (urllib.error.URLError, OSError) as error:
+        print(f"note: {url} -> {getattr(error, 'reason', error)}")
+        return 0, b""
 
 
 def check(name, ok, detail=""):
