@@ -35,8 +35,49 @@ defaults:
     shell: bash
 
 jobs:
+  # The landing page of the deployed commit (product/landing). This job has no environment
+  # and no secrets: the npm build tooling never runs next to the SSH key.
+  landing:
+    name: Build the landing page
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build the landing page
+        working-directory: product/landing
+        # Public build values only.
+        env:
+          VITE_APP_URL: https://my-knowledge.duckdns.org
+          VITE_LANDING_BASE_PATH: /_landing/
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+          test -f dist/index.html
+          tar -czf "${RUNNER_TEMP}/landing.tgz" -C dist .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v4
+        with:
+          name: landing-build
+          path: ${{ runner.temp }}/landing.tgz
+          if-no-files-found: error
+          retention-days: 7
+
   deploy:
     name: Deploy to the development VM
+    needs: landing
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -91,23 +132,12 @@ jobs:
         with:
           ref: ${{ env.DEPLOY_SHA }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
+      # The VM serves the landing build at / and /_landing/; saas-update installs it.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # ratchet:actions/download-artifact@v4
         if: steps.secrets.outputs.ready == 'true'
         with:
-          node-version: "22"
-      # The landing page of this commit (product/landing). The VM serves it at / and
-      # /_landing/; vm-bootstrap.sh saas-update installs it. Public build values only.
-      - name: Build the landing page
-        if: steps.secrets.outputs.ready == 'true'
-        working-directory: product/landing
-        env:
-          VITE_APP_URL: https://my-knowledge.duckdns.org
-          VITE_LANDING_BASE_PATH: /_landing/
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          npm run build
-          test -f dist/index.html
-          tar -czf "${RUNNER_TEMP}/landing.tgz" -C dist .
+          name: landing-build
+          path: ${{ runner.temp }}/landing
       - name: Deploy over SSH
         if: steps.secrets.outputs.ready == 'true'
         env:
@@ -144,7 +174,7 @@ jobs:
             rm -rf \"\$d\"; mv \"\$d.tmp\" \"\$d\"; touch \"\$d\";
             ls -1dt ${stage}/*/ | tail -n +4 | xargs -r rm -rf;
             echo \"Staged the landing build in \$d.\"" \
-            <"${RUNNER_TEMP}/landing.tgz" 2>&1 | tee "${log}"
+            <"${RUNNER_TEMP}/landing/landing.tgz" 2>&1 | tee "${log}"
           # pipefail: the job fails when the script on the VM fails, not only when tee fails.
           ssh "${ssh_opts[@]}" -- "${DEV_SSH_HOST}" \
             "ALLOW_RELEASE_CHANGE=${ALLOW_RELEASE_CHANGE} bash -s -- ${DEPLOY_SHA}" \
