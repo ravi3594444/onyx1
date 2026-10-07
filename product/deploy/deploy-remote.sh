@@ -162,16 +162,21 @@ active_stack() {
 # Deploys <sha> on project onyx-saas through "vm-bootstrap.sh saas-update" of that commit.
 deploy_saas() {
   local sha="$1" src_dir="$2" deploy_dir="$3" saas_dir="$4" log="$5"
-  local mode="" deployed stage run_log pid code=0 result
-  [[ "${ALLOW_RELEASE_CHANGE:-0}" != 1 ]] || mode=release-change
+  local mode=pins-only deployed stage run_log pid code=0 result
+  local -a mode_arg=()
+  if [[ "${ALLOW_RELEASE_CHANGE:-0}" == 1 ]]; then
+    mode=release-change
+    mode_arg=(release-change)
+  fi
 
   # One VM operation at a time (shared with vm-bootstrap.sh). The detached run below inherits
   # fd 8, so the lock lasts until saas-update ends, also when the SSH session drops.
-  exec 8>"${deploy_dir}/.vm-ops.lock"
+  exec 8>>"${deploy_dir}/.vm-ops.lock" || die "Cannot open ${deploy_dir}/.vm-ops.lock. Nothing was deployed."
   flock -w 1200 8 || die "Another VM operation holds ${deploy_dir}/.vm-ops.lock. Nothing was deployed."
   export VM_OPS_LOCKED=1
 
-  git -C "${src_dir}" fetch --quiet origin "${sha}"
+  git -C "${src_dir}" fetch --quiet origin "${sha}" ||
+    die "git fetch of ${sha} failed. Nothing was deployed."
   deployed="$(sed -n -E 's/^DEPLOYED_SHA=//p' "${saas_dir}/deployed.env" 2>/dev/null | tail -n 1 || true)"
   if [[ "${ALLOW_ROLLBACK:-0}" != 1 && "${deployed}" =~ ^[0-9a-f]{40}$ && "${deployed}" != "${sha}" ]]; then
     git -C "${src_dir}" merge-base --is-ancestor "${deployed}" "${sha}" ||
@@ -184,16 +189,17 @@ deploy_saas() {
   stage="${deploy_dir}/saas-update-stage"
   mkdir -p "${stage}"
   run_log="${stage}/saas-update.log"
-  git -C "${src_dir}" show "${sha}:product/deploy/vm-bootstrap.sh" >"${stage}/vm-bootstrap.sh"
-  [[ -s "${stage}/vm-bootstrap.sh" ]] || die "${sha} has no product/deploy/vm-bootstrap.sh."
-  bash -n "${stage}/vm-bootstrap.sh" || die "vm-bootstrap.sh of ${sha} does not parse."
+  git -C "${src_dir}" show "${sha}:product/deploy/vm-bootstrap.sh" >"${stage}/vm-bootstrap.sh" ||
+    die "${sha} has no product/deploy/vm-bootstrap.sh. Nothing was deployed."
+  [[ -s "${stage}/vm-bootstrap.sh" ]] || die "vm-bootstrap.sh of ${sha} is empty. Nothing was deployed."
+  bash -n "${stage}/vm-bootstrap.sh" || die "vm-bootstrap.sh of ${sha} does not parse. Nothing was deployed."
 
-  echo "$(date -u +%FT%TZ) saas-update ${sha} start (mode=${mode:-pins-only})." >>"${log}"
+  echo "$(date -u +%FT%TZ) saas-update ${sha} start (mode=${mode})." >>"${log}"
   : >"${run_log}"
   # Detached in its own session: a closed SSH session does not stop the update. Its output
-  # goes to the log, and tail streams the log until the process ends.
-  # shellcheck disable=SC2086
-  setsid bash "${stage}/vm-bootstrap.sh" saas-update "${sha}" ${mode} \
+  # goes to the log, and tail streams the log until the process ends. --wait: when setsid
+  # must fork, PID is still the process that ends with the update and gives its exit code.
+  setsid --wait bash "${stage}/vm-bootstrap.sh" saas-update "${sha}" "${mode_arg[@]}" \
     >"${run_log}" 2>&1 </dev/null &
   pid=$!
   echo "saas-update runs as PID ${pid}. Log: ${run_log}"
@@ -206,7 +212,7 @@ deploy_saas() {
   if ((code == 0)) && [[ "${result}" != deployed && "${result}" != unchanged ]]; then
     code=1
   fi
-  echo "$(date -u +%FT%TZ) saas-update ${sha} RESULT=${result} exit=${code} (mode=${mode:-pins-only})." >>"${log}"
+  echo "$(date -u +%FT%TZ) saas-update ${sha} RESULT=${result} exit=${code} (mode=${mode})." >>"${log}"
   echo "RESULT=${result}"
   return "${code}"
 }

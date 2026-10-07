@@ -4,6 +4,10 @@
 # The backup folder must not exist. The script writes into a temporary sibling folder and
 # renames it only after SHA256SUMS is complete. A failed copy leaves no backup folder.
 # Copy the backup folder off the VM. It holds .env, which contains secrets.
+# Optional: BACKUP_EXTRA_DIR names a folder that the script copies into <backup>/extra/
+# before the stack stops; SHA256SUMS covers its files too.
+# Before the stack stops, the script checks that the backup file system has room for the
+# uncompressed size of the volumes plus BACKUP_MIN_FREE_MARGIN_MB (default 1024).
 set -euo pipefail
 # The backup holds secrets and customer data: only the owner may read it.
 umask 077
@@ -15,7 +19,17 @@ project="${3:-onyx}"
 # Model caches, logs and Redis are not durable state.
 volumes=(db_volume opensearch-data minio_data file-system)
 tool_image="${BACKUP_TOOL_IMAGE:-postgres:15.2-alpine}"
+extra_dir="${BACKUP_EXTRA_DIR:-}"
+margin_mb="${BACKUP_MIN_FREE_MARGIN_MB:-1024}"
 
+if [[ -n "${extra_dir}" && ! -d "${extra_dir}" ]]; then
+  echo "BACKUP_EXTRA_DIR ${extra_dir} is not a folder. Stop." >&2
+  exit 1
+fi
+if [[ ! "${margin_mb}" =~ ^[0-9]+$ ]]; then
+  echo "BACKUP_MIN_FREE_MARGIN_MB must be a number of MiB. Stop." >&2
+  exit 1
+fi
 if [[ -e "${backup_dir}" ]]; then
   echo "${backup_dir} exists. Stop: give a new backup folder." >&2
   exit 1
@@ -31,6 +45,23 @@ for volume in "${volumes[@]}"; do
     exit 1
   fi
 done
+
+# Disk preflight while the stack runs: the uncompressed size of the volumes is an upper
+# bound of the archives.
+needed_kb=$((margin_mb * 1024))
+for volume in "${volumes[@]}"; do
+  size_kb="$(docker run --rm -v "${project}_${volume}:/volume:ro" "${tool_image}" du -sk /volume | cut -f1)"
+  [[ "${size_kb}" =~ ^[0-9]+$ ]] || { echo "The size of ${project}_${volume} is unknown. Stop." >&2; exit 1; }
+  echo "volume ${project}_${volume}: $((size_kb / 1024)) MiB"
+  needed_kb=$((needed_kb + size_kb))
+done
+free_kb="$(df -Pk "$(dirname "${backup_dir}")" | awk 'NR == 2 { print $4 }')"
+[[ "${free_kb}" =~ ^[0-9]+$ ]] || { echo "The free space of $(dirname "${backup_dir}") is unknown. Stop." >&2; exit 1; }
+echo "free space for the backup: $((free_kb / 1024)) MiB, needed at most: $((needed_kb / 1024)) MiB"
+if ((free_kb < needed_kb)); then
+  echo "Not enough free space in $(dirname "${backup_dir}"). Stop: the stack was not stopped." >&2
+  exit 1
+fi
 
 # The fatal signals that the script catches (Linux names). Nothing can catch SIGKILL.
 signals=(HUP INT TERM USR1 USR2 ALRM VTALRM PROF XCPU XFSZ IO PWR SYS PIPE)
@@ -86,6 +117,10 @@ work_dir="${backup_dir}.incomplete.$$"
 # If the name is in use, keep that folder: this script did not make it.
 mkdir -m 700 "${work_dir}" || { work_dir="" && exit 1; }
 install -m 600 "${compose_dir}/.env" "${work_dir}/env.backup"
+if [[ -n "${extra_dir}" ]]; then
+  mkdir -m 700 "${work_dir}/extra"
+  cp -R "${extra_dir}/." "${work_dir}/extra/"
+fi
 
 started=$(date +%s)
 stopped=1
@@ -109,7 +144,15 @@ trap on_signal "${signals[@]}"
 downtime=$(($(date +%s) - started))
 
 # The copy is complete also if the start failed, because the stack was stopped.
-(cd "${work_dir}" && sha256sum ./*.tar.gz env.backup >SHA256SUMS)
+(
+  cd "${work_dir}"
+  {
+    sha256sum ./*.tar.gz env.backup
+    if [[ -d extra ]]; then
+      find ./extra -type f -print0 | sort -z | xargs -0 -r sha256sum
+    fi
+  } >SHA256SUMS
+)
 mv -T "${work_dir}" "${backup_dir}"
 work_dir=""
 echo "Backup in ${backup_dir}. Downtime: ${downtime} s."

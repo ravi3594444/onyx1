@@ -41,7 +41,7 @@ counterpart: the overlay only adds files.
 
 | Patch | File | Why |
 | --- | --- | --- |
-| `0001-tenant-defaults-hook.patch` | `ee/onyx/server/tenants/provisioning.py` | One import and a call to `apply_platform_defaults` in `setup_tenant`, after `setup_onyx`, in the same tenant session. A failure is logged with `logger.exception` and does not stop the tenant creation; the backfill repairs the tenant later. |
+| `0001-tenant-defaults-hook.patch` | `ee/onyx/server/tenants/provisioning.py` | One import and a call to `apply_platform_defaults` in `setup_tenant`, after `setup_onyx`, in the same tenant session. A failure is logged with `logger.exception` and does not stop the tenant creation; the backfill repairs the tenant later. The traceback holds only the `RuntimeError` of `apply_platform_defaults`: the first line of each step error, without SQL parameters or keys. |
 | `0002-llm-provider-type-key-guard.patch` | `onyx/server/manage/llm/api.py` | Credential protection, see below. `_validate_llm_provider_change` also rejects a changed provider type when the request keeps the stored key (HTTP 400). The provider upsert and the provider test pass the types. |
 | `0002-llm-provider-type-key-guard.patch` | `onyx/server/manage/image_generation/api.py` | The image generation config update passes the types to the same check. |
 | `0003-voice-llm-key-reuse-guard.patch` | `onyx/server/manage/voice/api.py` | Credential protection. A voice provider may copy the key of an LLM provider (`llm_provider_id`) only for the same provider type and API base in multi-tenant mode (HTTP 400 otherwise). Upstream copied it to any voice provider type and target URI. |
@@ -62,7 +62,7 @@ Set these on the api_server and on the background workers of the multi-tenant st
 | `FIREWORKS_DEFAULT_PROVIDER` | `fireworks_ai` | LiteLLM provider type |
 | `FIREWORKS_DEFAULT_API_BASE` | none | Optional endpoint override |
 | `WEB_SEARCH_DEFAULT_PROVIDER` | none | Search provider type: `exa`, `brave`, `serper`, `tavily`, `google_pse` or `searxng`. Without it the web search step is skipped (`skipped_not_configured`). |
-| `WEB_SEARCH_DEFAULT_API_KEY` | none | Search key. Required for every type except `searxng`. Secret, same rule as the platform key. |
+| `WEB_SEARCH_DEFAULT_API_KEY` | none | Search key. Required for every type except `searxng`. Secret, same rule as the platform key. The step stores it only when Enterprise Edition is active (`skipped_no_encryption` otherwise). |
 | `WEB_SEARCH_DEFAULT_CONFIG` | none | JSON object of strings, the `config` of the provider row. Example: `{"searxng_base_url":"http://searxng:8080","num_results":"10"}`. Google PSE needs `search_engine_id`. |
 | `WEB_SEARCH_DEFAULT_DISPLAY_NAME` | `22nd X AI web search` | Provider name in the admin page |
 
@@ -102,6 +102,7 @@ the tools of the assistant do not change.
 | Instructions | assistant prompt is NULL (the built-in default) | `set` |
 | Instructions | any other value | `kept` |
 | Web search | no `WEB_SEARCH_DEFAULT_PROVIDER` | `skipped_not_configured` (no marker) |
+| Web search | `WEB_SEARCH_DEFAULT_API_KEY` is set and Enterprise Edition is not active | `skipped_no_encryption`: nothing is written, not even the marker. Only the EE build encrypts stored keys. The step runs again when EE is active. A `searxng` provider without a key does not need EE. |
 | Web search | the marker row exists | `kept_marker`: nothing is read or written |
 | Web search | no marker, any search provider row exists | `kept`: the marker is written with `{"decision": "kept"}` |
 | Web search | no marker, no search provider row | `created`: provider row created and activated, marker `{"decision": "created"}` |
@@ -123,8 +124,10 @@ The four steps are independent. Each runs in its own try: on an error the step r
 back, the next step still runs, and at the end a `RuntimeError` names the failed steps
 (no secrets). The model step raises when our provider exists without our model, or
 when several providers have our name. An admin must then pick the default by hand.
-Each call logs one INFO line with the tenant id and the four results. The keys are
-never logged or printed.
+Each call logs one INFO line with the tenant id and the four results. A failed step
+logs one ERROR line with the step, the tenant id and the first line of the error. That
+line has no traceback: a SQLAlchemy traceback holds the statement parameters. The keys
+are never logged or printed.
 
 ## Backfill
 
@@ -148,8 +151,8 @@ then 1. `--tenant-id ID` runs one tenant.
 
 ## Platform key rotation
 
-The platform key is in every tenant's `llm_provider` row (and in voice provider rows
-that copied it). `--rotate-platform-key` replaces it in every tenant schema:
+The platform key is in the platform model row of every tenant's `llm_provider`
+table. `--rotate-platform-key` replaces it in every tenant schema:
 
 ```bash
 # NEW key: FIREWORKS_DEFAULT_API_KEY of the container.
@@ -168,31 +171,67 @@ Rules:
 - It refuses to run when Enterprise Edition is not active (`global_version.is_ee_version()`),
   because only the EE build encrypts the stored keys. It warns when `ENCRYPTION_KEY_SECRET`
   is empty.
-- A row is rotated when its decrypted key equals the stdin key or when the SHA-256 of
-  the key is in the fingerprints file, and the key is not the new key already. The
-  write goes through the ORM, so `EncryptedString` encrypts the new value. After the
-  commit (one per tenant) the row is read back and the decrypted value is compared.
-- `llm_provider` and `voice_provider` rows are rotated. `internet_search_provider`
-  and `internet_content_provider` rows are scanned and reported (`search_matched`)
-  only: the search key is a different secret. Add `--include-web-search` to rotate
-  them too.
-- Output per tenant: `tenant <id>: llm_rows=<n> voice_rows=<n> search_rows=<n>
-  matched=<n> rotated=<n> already_new=<n> search_matched=<n>`, then
-  `rotation: tenants X, matched Y, rotated Z, failed W`. Exit status 1 on any
-  failure. `--dry-run` writes nothing. No key and no matching value is printed; the
-  SHA-256 of the new key is printed so that the operator can store it.
+- A row holds an old key when its decrypted key equals the stdin key, or when the
+  SHA-256 of the key is in the fingerprints file. A key in use now
+  (`FIREWORKS_DEFAULT_API_KEY`, `WEB_SEARCH_DEFAULT_API_KEY`) is never an old key.
+- Only a platform model row gets the new key. A platform model row has `provider` equal
+  to `FIREWORKS_DEFAULT_PROVIDER`, `api_base` equal to `FIREWORKS_DEFAULT_API_BASE` (two
+  empty values are equal) and an empty `custom_config`. The name does not count.
+- Every other row that holds an old key is `matched_foreign`. The command never writes
+  it. The output gives its table, id, provider type and reason: `provider_type`,
+  `api_base`, `custom_config`, `voice_provider` (every voice row: a voice provider sends
+  the key to another vendor or URL), `content_provider` (every content row), `config`
+  or `no_platform_search` (web search rows).
+- A row that holds a retired key but points elsewhere keeps the old key and stops
+  working when the key is revoked. That is intended: the platform key goes to the
+  platform endpoint only.
+- By default the command writes no web search row. A platform web search row has the
+  `provider_type` and `config` of the `WEB_SEARCH_DEFAULT_*` settings. When it holds an
+  old key, it counts as `search_skipped`. With `--include-web-search`, it gets
+  `WEB_SEARCH_DEFAULT_API_KEY`: the search key, never the model key. The option refuses
+  to run without a search key, with settings that are not valid, or when the search key
+  equals the model key.
+- The write goes through the ORM, as in `upsert_llm_provider`, so `EncryptedString`
+  encrypts the new value. After the commit (one per tenant) each written row is read
+  back and the decrypted value is compared.
+- Output per tenant, then one summary line:
 
-Procedure (the VM script writes the fingerprints of every platform key it has seen to
+  ```
+  tenant <id>: llm_rows=<n> voice_rows=<n> search_rows=<n> matched=<n> matched_foreign=<n> rotated=<n> already_new=<n> search_skipped=<n>
+  tenant <id>: matched_foreign <table> id=<id> type=<provider type> reason=<reason>
+  rotation: tenants X, matched Y, matched_foreign F, rotated Z, failed W
+  ```
+
+  `search_rows` counts the web search and content rows. `already_new` counts the rows
+  that the command would write and that hold the new key already. The exit status is 1
+  when a tenant failed and 2 for a bad option or environment. `--dry-run` writes
+  nothing. No key and no matching value is printed. The SHA-256 of the new key (and of
+  the new search key) is printed, so that the operator can store it.
+- Change the key and the endpoint (`FIREWORKS_DEFAULT_PROVIDER`,
+  `FIREWORKS_DEFAULT_API_BASE`) in two separate steps. After an endpoint change, the
+  existing rows do not match the platform identity and count as `matched_foreign`.
+
+Procedure (the VM script writes the fingerprint of each retired platform key to
 `/srv/onyx/secrets/platform-key-fingerprints`):
 
-1. Put the new key in the deployment `.env` and recreate the containers. New tenants
-   now get the new key.
-2. Run the rotation with `--dry-run` and read the counts. Then run it without
-   `--dry-run`.
-3. Run `--dry-run` again: `matched 0`.
+1. Put the new key in the deployment `.env` and recreate the containers (api_server
+   and background workers). New tenants now get the new key.
+2. Run the rotation with `--dry-run`. Read `matched` and the `matched_foreign` lines.
+   Then run it without `--dry-run`.
+3. Run `--dry-run` again: `matched 0`. The `matched_foreign` count does not change:
+   these rows keep the old key.
 4. Revoke the old key at Fireworks.
 5. After a restore of an older backup, run the rotation again: the restored rows hold
-   the old key.
+   the old key. Keep the old fingerprints in the file for this reason.
+
+Exposure that remains (no patch):
+
+- A company admin sees the first and last 4 characters of the platform keys in the
+  masked admin views.
+- A company admin can change the `provider_type` of the platform web search row and keep
+  the stored key. The search key then goes to another search vendor. This is an upstream
+  gap (see the review below); we do not patch it. The rotation counts such a row as
+  `matched_foreign` and does not write it.
 
 ## Credential protection review (v4.8.4)
 

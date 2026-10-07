@@ -68,7 +68,8 @@ jobs:
           docker run --rm "${IMAGE}:${GITHUB_SHA}" python -c "
           import dataclasses
           import inspect
-          import onyx.axi.backfill
+          import typing
+          import onyx.axi.backfill as bf
           import onyx.axi.tenant_defaults as td
           import ee.onyx.server.tenants.provisioning as p
           import onyx.server.manage.llm.api as llm_api
@@ -81,7 +82,12 @@ jobs:
           assert td._web_search_settings() is None
           fields = {f.name for f in dataclasses.fields(td.PlatformDefaultsResult)}
           assert fields == {'llm', 'instructions', 'web_search', 'code_interpreter'}, fields
-          assert callable(onyx.axi.backfill._rotate_tenant)
+          outcomes = set(typing.get_args(td.WebSearchOutcome))
+          assert outcomes == {'created', 'kept', 'kept_marker', 'skipped_not_configured', 'skipped_no_encryption'}, outcomes
+          assert set(typing.get_args(td.CodeInterpreterOutcome)) == {'enabled', 'disabled_kept', 'seeded'}
+          counts = {f.name for f in dataclasses.fields(bf.RotationCounts)}
+          assert {'matched', 'matched_foreign', 'rotated', 'already_new'} <= counts, counts
+          assert callable(bf._rotate_tenant) and callable(bf._llm_foreign_reason)
           print('smoke test passed')
           "
           docker run --rm "${IMAGE}:${GITHUB_SHA}" python -m onyx.axi.backfill --help \

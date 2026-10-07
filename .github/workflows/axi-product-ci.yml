@@ -202,6 +202,13 @@ jobs:
               check(name in services, f"service {name} exists")
           ci = services.get("code-interpreter", {})
           check("default" not in (ci.get("networks") or {}), "code-interpreter is not on the default network")
+          check(not ci.get("ports"), "code-interpreter publishes no port")
+          internal = [
+              network for network in (ci.get("networks") or {})
+              if (config.get("networks") or {}).get(network, {}).get("internal") is True
+          ]
+          check(bool(ci.get("networks")) and len(internal) == len(ci["networks"]),
+                f"code-interpreter is only on internal networks ({sorted(ci.get('networks') or {})})")
           raw = env_file_config["services"]
           check("env_file" not in raw.get("code-interpreter", {}), "code-interpreter has no env_file")
           check("env_file" in raw.get("api_server", {}), "control: api_server keeps its env_file")
@@ -229,7 +236,8 @@ jobs:
           for name, service in sorted(services.items()):
               image = service.get("image") or ""
               if repo(image) in allowed:
-                  check(image in allowed[repo(image)], f"{name} uses the release.env pin {image}")
+                  check(image in allowed[repo(image)] and bool(pinned.match(image)),
+                        f"{name} uses the release.env pin {image} (tag@sha256)")
               elif name in ("code-interpreter", "ci-gateway", "searxng"):
                   check(bool(pinned.match(image)), f"{name} image is tag@sha256 pinned: {image}")
               else:
@@ -238,6 +246,9 @@ jobs:
                 "api_server runs ONYX_BACKEND_IMAGE_CLOUD")
           check(services.get("web_server", {}).get("image") == release.get("ONYX_WEB_SERVER_IMAGE_CLOUD"),
                 "web_server runs ONYX_WEB_SERVER_IMAGE_CLOUD")
+          executor = (ci.get("environment") or {}).get("PYTHON_EXECUTOR_DOCKER_IMAGE")
+          check(executor == release.get("PYTHON_EXECUTOR_IMAGE") and bool(digest.match(executor or "")),
+                f"code-interpreter starts the release.env executor image {executor}")
           if failed:
               print(f"::error::{len(failed)} multi-tenant render checks failed: {failed}")
               sys.exit(1)

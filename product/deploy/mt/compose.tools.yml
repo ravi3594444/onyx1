@@ -48,20 +48,35 @@ services:
       LOG_LEVEL: INFO
     networks:
       - ci_internal
+    # The upstream mount of ${DOCKER_SOCK_PATH:-/var/run/docker.sock}, without the fallback to
+    # the main socket and without "create the path": a missing socket stops the start of the
+    # container (Docker would create a directory at the socket path otherwise, and the
+    # rootless daemon could not start any more). saas_prepare pins DOCKER_SOCK_PATH from
+    # /srv/onyx/ci-executor.env (ci-host-setup). ci-cleanup.sh starts the container again
+    # when the socket was missing at boot, and restarts it when it is unhealthy.
     volumes:
-      # Upstream mounts ${DOCKER_SOCK_PATH:-/var/run/docker.sock} as /var/run/docker.sock.
-      # saas_prepare pins DOCKER_SOCK_PATH from /srv/onyx/ci-executor.env (ci-host-setup).
-      # The staged files live in memory, readable by root only, and ci-cleanup.sh deletes
-      # files older than 30 minutes.
-      - type: tmpfs
-        target: /tmp/code-interpreter-files
-        tmpfs:
-          size: 1g
-          mode: 0700
+      - type: bind
+        source: ${DOCKER_SOCK_PATH:?set DOCKER_SOCK_PATH in .env (vm-bootstrap.sh saas_prepare pins it from /srv/onyx/ci-executor.env)}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+    # The staged files live in memory, readable by root only. ci-cleanup.sh deletes files
+    # older than 30 minutes (the API never deletes them).
+    tmpfs:
+      - /tmp/code-interpreter-files:size=1g,mode=0700
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
           memory: "${CI_API_MEM_LIMIT:-3g}"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "6"
+    # The upstream healthcheck stays: GET /health must answer status ok (Docker daemon
+    # reachable, executor image present).
 
   # The gateway: the only client of the code interpreter API. api_server calls
   # http://ci-gateway:8000 (CODE_INTERPRETER_BASE_URL). See tools/ci-gateway.conf.

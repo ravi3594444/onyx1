@@ -4,8 +4,11 @@
 #   COMPOSE_FILE=docker-compose.yml:compose.override.yml:compose.saas.yml:compose.restore.yml
 #   COMPOSE_PROFILES=s3-filestore
 # The copy answers on 127.0.0.1:3300 only, sends no email, calls no platform model and has
-# no tools: the services below with the profile "restore-disabled" are never created.
-# restore.sh starts nginx and the services that it needs; "background" stays off.
+# no tools: the services below with the profile "restore-disabled" (background,
+# indexing_model_server, code-interpreter) are never created. restore.sh starts nginx and
+# the services that it needs. restore.sh pins COMPOSE_PROJECT_NAME, COMPOSE_FILE and
+# COMPOSE_PROFILES into the restored .env, so a plain "docker compose" in the restore folder
+# addresses the copy, never onyx-saas.
 # The memory limits are the ones of compose.mt.yml. The restore test needs 5 GiB free.
 
 # For reading; the -p of vm-bootstrap.sh and COMPOSE_PROJECT_NAME in .env win.
@@ -91,14 +94,9 @@ services:
     ports: !override
       - "127.0.0.1:3300:80"
 
-  # The tool services of compose.tools.yml are not in the file list of the copy. The
-  # upstream code-interpreter service is; the extra profile keeps it off (compose joins
-  # the profile lists, and none of them is active).
+  # compose.tools.yml is not in the file list of the copy, so ci-gateway and searxng do
+  # not exist there. The upstream code-interpreter service does. Compose appends profile
+  # lists, so !override replaces the profile "code-interpreter" of compose.override.yml:
+  # the service stays off even when COMPOSE_PROFILES names "code-interpreter".
   code-interpreter:
-    profiles: ["restore-disabled"]
-  ci-gateway:
-    profiles: ["restore-disabled"]
-    image: ${CI_GATEWAY_IMAGE:-nginx:1.25.5-alpine}
-  searxng:
-    profiles: ["restore-disabled"]
-    image: ${SEARXNG_IMAGE:-searxng/searxng}
+    profiles: !override ["restore-disabled"]

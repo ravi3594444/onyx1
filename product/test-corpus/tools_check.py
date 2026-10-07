@@ -203,11 +203,17 @@ def looks_like_csv(content: bytes, content_type: str) -> bool:
 
 
 def key_hidden(value: Any) -> bool:
-    """True when the listing shows no key or only a mask."""
+    """True when the listing shows no key or only a mask.
+
+    v4.8.4 masks as "abcd...wxyz", or as bullets for a short key (mask_string in
+    backend/onyx/utils/encryption.py).
+    """
     if value is None or value == "":
         return True
     text = str(value)
-    return ("..." in text or "*" in text) and len(text) <= 24
+    if set(text) <= {"•", "*"}:
+        return True
+    return "..." in text and len(text) <= 24
 
 
 def provider_summary(provider: dict[str, Any]) -> dict[str, Any]:
@@ -535,11 +541,9 @@ class ToolsCheck:
             {},
         )
         user_files = upload.get("user_files") if isinstance(upload, dict) else None
-        expect(
-            isinstance(user_files, list) and len(user_files) == 1,
-            f"CSV upload returned {upload}",
-        )
-        user_file = user_files[0]
+        if not isinstance(user_files, list) or len(user_files) != 1:
+            raise SystemExit(f"CSV upload returned {upload}")
+        user_file: dict[str, Any] = user_files[0]
         file_ids = [str(user_file["id"])]
 
         def read_statuses() -> list[str]:
@@ -552,9 +556,10 @@ class ToolsCheck:
         statuses, seconds = poll(
             read_statuses, lambda found: all(s in FILE_END_STATUSES for s in found)
         )
+        # SKIPPED: stored without indexing (a large table); the chat can still use it.
         self.checks.record(
-            f"{self.csv_name} attached by member A reaches COMPLETED",
-            statuses == ["COMPLETED"],
+            f"{self.csv_name} attached by member A reaches COMPLETED or SKIPPED",
+            statuses in (["COMPLETED"], ["SKIPPED"]),
             {
                 "statuses": statuses,
                 "seconds": seconds,
@@ -720,7 +725,8 @@ class ToolsCheck:
 
     def step_generated_files(self) -> None:
         member = self.session("member-a")
-        expect(self.csv_descriptor is not None, "step b did not attach the CSV")
+        if self.csv_descriptor is None:
+            raise SystemExit("step b did not attach the CSV")
         run = run_chat(
             member,
             CHART_QUESTION,
@@ -753,6 +759,11 @@ class ToolsCheck:
                 "regions_in_csv": sorted(r for r in self.by_region if r in text),
                 "csv_head": text[:200],
             }
+        self.checks.record(
+            "member A downloads every generated file (200)",
+            bool(files) and all(f["status"] == 200 for f in files.values()),
+            {file_id: f["status"] for file_id, f in files.items()},
+        )
         self.checks.record(
             "member A downloads a PNG chart among the generated files",
             any(f["status"] == 200 and f["png"] for f in files.values()),
@@ -861,6 +872,27 @@ class ToolsCheck:
             self.csv_marker not in json.dumps(docs)
             and self.csv_name not in titles(docs),
             {"titles": titles(docs)},
+        )
+        status, listing = owner_b.request("GET", "/api/chat/get-user-chat-sessions")
+        sessions_b = listing.get("sessions") if isinstance(listing, dict) else None
+        ids_a: set[str] = set()
+        for key in ("csv", "generated_files_a"):
+            item = self.record.get(key)
+            if isinstance(item, dict) and item.get("chat_session_id"):
+                ids_a.add(str(item["chat_session_id"]))
+        text_b = json.dumps(sessions_b)
+        self.checks.record(
+            "owner B chat sessions hold no trace of company A's CSV chats",
+            status == 200
+            and isinstance(sessions_b, list)
+            and not any(session_id in text_b for session_id in ids_a)
+            and self.csv_marker not in text_b
+            and self.csv_name not in text_b,
+            {
+                "status": status,
+                "sessions": len(sessions_b or []),
+                "ids_a": sorted(ids_a),
+            },
         )
         if self.csv_session_id:
             status, data = owner_b.request(

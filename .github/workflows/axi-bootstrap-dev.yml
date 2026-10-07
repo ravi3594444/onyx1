@@ -299,8 +299,9 @@ jobs:
               args="saas-restore-test ${GITHUB_SHA}"
               if [[ -n "${BACKUP_PATH}" ]]; then
                 # The value goes into the remote command line, so allow one plain folder name.
-                if [[ ! "${BACKUP_PATH}" =~ ^/srv/backups/[A-Za-z0-9_.-]+$ ]]; then
-                  echo "::error::backup_path must match ^/srv/backups/[A-Za-z0-9_.-]+$."; exit 1
+                if [[ ! "${BACKUP_PATH}" =~ ^/srv/backups/[A-Za-z0-9_.-]+$ ||
+                  "${BACKUP_PATH##*/}" == . || "${BACKUP_PATH##*/}" == .. ]]; then
+                  echo "::error::backup_path must match ^/srv/backups/[A-Za-z0-9_.-]+$ (not . or ..)."; exit 1
                 fi
                 args+=" ${BACKUP_PATH}"
               fi

@@ -11,7 +11,7 @@ The function is repeatable and never overwrites a choice that the company made.
 import json
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, TypeVar
 
 from sqlalchemy import func, select
@@ -123,7 +123,8 @@ class PlatformDefaultsResult:
 @dataclass(frozen=True)
 class WebSearchSettings:
     provider_type: WebSearchProviderType
-    api_key: str | None
+    # repr=False: a logged or printed object must not show the key.
+    api_key: str | None = field(repr=False)
     config: dict[str, str]
 
 
@@ -358,20 +359,30 @@ def _run_step(
     db_session: Session,
     failures: list[str],
 ) -> T | None:
-    """Run one step. On error, roll back, record the step and return None."""
+    """Run one step. On error, roll back, record the step and return None.
+
+    The log gets one line and no traceback: a SQLAlchemy error carries the
+    statement parameters, and these can hold an encrypted or plain key.
+    """
     try:
         return apply()
     except Exception as e:
-        db_session.rollback()
         text = safe_error_text(e)
         failures.append(f"{step} ({text})")
-        # No exc_info: a SQLAlchemy traceback carries the statement parameters.
         logger.error(
             "Platform defaults step %s failed for tenant %s: %s",
             step,
             CURRENT_TENANT_ID_CONTEXTVAR.get(),
             text,
         )
+        try:
+            db_session.rollback()
+        except Exception as rollback_error:
+            # "from None": a caller's traceback must not show the first error.
+            raise RuntimeError(
+                f"Platform defaults step {step}: rollback failed: "
+                f"{safe_error_text(rollback_error)}"
+            ) from None
         return None
 
 

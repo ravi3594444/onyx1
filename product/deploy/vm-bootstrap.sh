@@ -1470,6 +1470,8 @@ readonly SAAS_RESTORE_PORT=3300
 readonly SAAS_RESTORE_FILES=(docker-compose.yml compose.override.yml compose.saas.yml compose.restore.yml)
 # MemAvailable that the restore copy needs after the tool services stop: 5 GiB, in kB.
 readonly SAAS_RESTORE_MIN_AVAILABLE_KB=$((5 * 1024 * 1024))
+# Free disk space that saas-backup and saas-restore-test need at least: 5 GiB, in kB.
+readonly SAAS_MIN_FREE_KB=$((5 * 1024 * 1024))
 readonly SAAS_URL="https://${DNS_NAME}"
 readonly SAAS_TAG_FILE="${SAAS_DIR}/saas-tag"
 readonly SAAS_SALT_FILE="${SAAS_DIR}/saas-salt"
@@ -1959,17 +1961,17 @@ saas_model_defaults() {
   fi
   # A new key: keep the fingerprint (sha256) of the old one, so that saas-rotate-key finds
   # the company providers that still hold it. The log never shows a key.
-  old_key="$(stack_env_value "${env_file}" FIREWORKS_DEFAULT_API_KEY)"
+  old_key="$(model_env_value "${env_file}" FIREWORKS_DEFAULT_API_KEY)"
   if [[ -n "${old_key}" && "${old_key}" != "${key}" ]]; then
     record_key_fingerprint "${old_key}" ||
       die "The fingerprint of the previous platform key could not be recorded in ${KEY_FINGERPRINTS_FILE}."
     PLATFORM_KEY_CHANGED=1
     echo "platform key changed: fingerprint of the previous key recorded"
   fi
-  set_env_key FIREWORKS_DEFAULT_API_KEY "${key}" "${env_file}"
-  set_env_key FIREWORKS_DEFAULT_MODEL "${model}" "${env_file}"
-  set_env_key FIREWORKS_DEFAULT_PROVIDER "${provider:-fireworks_ai}" "${env_file}"
-  set_env_key FIREWORKS_DEFAULT_API_BASE "${base}" "${env_file}"
+  set_env_key FIREWORKS_DEFAULT_API_KEY "${key}" "${env_file}" || die "Could not write ${env_file}."
+  set_env_key FIREWORKS_DEFAULT_MODEL "${model}" "${env_file}" || die "Could not write ${env_file}."
+  set_env_key FIREWORKS_DEFAULT_PROVIDER "${provider:-fireworks_ai}" "${env_file}" || die "Could not write ${env_file}."
+  set_env_key FIREWORKS_DEFAULT_API_BASE "${base}" "${env_file}" || die "Could not write ${env_file}."
   grep -qE '^FIREWORKS_DEFAULT_API_KEY=.+' "${env_file}" ||
     die "FIREWORKS_DEFAULT_API_KEY did not reach ${env_file}."
   echo "Set from ${file} (values not shown): FIREWORKS_DEFAULT_API_KEY FIREWORKS_DEFAULT_MODEL FIREWORKS_DEFAULT_PROVIDER FIREWORKS_DEFAULT_API_BASE"
@@ -2030,45 +2032,53 @@ saas_prepare() {
     die "${env_file} is a copy of the live .env. Remove it; cutover then writes new secrets."
   fi
   chmod 600 "${env_file}" || die "chmod 600 ${env_file} failed."
-  stack_env_pin "${env_file}" DOMAIN "${DNS_NAME}"
-  stack_env_pin "${env_file}" WEB_DOMAIN "${SAAS_URL}"
+  pin_or_die "${env_file}" DOMAIN "${DNS_NAME}"
+  pin_or_die "${env_file}" WEB_DOMAIN "${SAAS_URL}"
   # The release, the web build with NEXT_PUBLIC_CLOUD_ENABLED=true, the backend build that
   # gives every new company the platform defaults, the model server and the tool images.
-  stack_env_pin "${env_file}" IMAGE_TAG "$(release_value ONYX_RELEASE_TAG)"
-  stack_env_pin "${env_file}" ONYX_WEB_SERVER_IMAGE "${cloud_image}"
-  stack_env_pin "${env_file}" ONYX_BACKEND_IMAGE "${backend_image}"
+  pin_or_die "${env_file}" IMAGE_TAG "$(release_value ONYX_RELEASE_TAG)"
+  pin_or_die "${env_file}" ONYX_WEB_SERVER_IMAGE "${cloud_image}"
+  pin_or_die "${env_file}" ONYX_BACKEND_IMAGE "${backend_image}"
   for key in ONYX_MODEL_SERVER_IMAGE CODE_INTERPRETER_IMAGE PYTHON_EXECUTOR_IMAGE CI_GATEWAY_IMAGE SEARXNG_IMAGE; do
-    stack_env_pin "${env_file}" "${key}" "$(release_value "${key}")"
+    pin_or_die "${env_file}" "${key}" "$(release_value "${key}")"
   done
   echo "Set DOMAIN, WEB_DOMAIN, IMAGE_TAG, ONYX_WEB_SERVER_IMAGE, ONYX_BACKEND_IMAGE (cloud builds), ONYX_MODEL_SERVER_IMAGE, CODE_INTERPRETER_IMAGE, PYTHON_EXECUTOR_IMAGE, CI_GATEWAY_IMAGE and SEARXNG_IMAGE in ${env_file}."
   # The tool services (profile code-interpreter), the gateway address and the executor socket.
-  stack_env_pin "${env_file}" COMPOSE_PROFILES "s3-filestore,code-interpreter"
-  stack_env_pin "${env_file}" CODE_INTERPRETER_BASE_URL "http://ci-gateway:8000"
-  stack_env_pin "${env_file}" DOCKER_SOCK_PATH "${sock}"
+  pin_or_die "${env_file}" COMPOSE_PROFILES "s3-filestore,code-interpreter"
+  pin_or_die "${env_file}" CODE_INTERPRETER_BASE_URL "http://ci-gateway:8000"
+  pin_or_die "${env_file}" DOCKER_SOCK_PATH "${sock}"
   if [[ "${mode}" == main-socket ]]; then
-    ci_env_add_cgroup_parent "${env_file}"
+    ci_env_add_cgroup_parent "${env_file}" || die "Could not set CI_EXECUTOR_RUN_ARGS in ${env_file}."
   else
-    ci_env_drop_cgroup_parent "${env_file}"
+    ci_env_drop_cgroup_parent "${env_file}" || die "Could not set CI_EXECUTOR_RUN_ARGS in ${env_file}."
   fi
   echo "Set COMPOSE_PROFILES=s3-filestore,code-interpreter, CODE_INTERPRETER_BASE_URL=http://ci-gateway:8000 and DOCKER_SOCK_PATH=${sock} (${mode}) in ${env_file}."
   if [[ -z "$(stack_env_value "${env_file}" SEARXNG_SECRET)" ]]; then
-    stack_env_pin "${env_file}" SEARXNG_SECRET "$(openssl rand -hex 32)"
+    key="$(openssl rand -hex 32)" || die "openssl rand failed."
+    pin_or_die "${env_file}" SEARXNG_SECRET "${key}"
     echo "Wrote SEARXNG_SECRET into ${env_file} (value not shown)."
   fi
   # The web search default of every new company. An owner-supplied provider in
   # secrets/saas.env wins: saas_merge_secrets runs last.
   if ! grep -qE '^WEB_SEARCH_DEFAULT_PROVIDER=' "${env_file}"; then
-    set_env_key WEB_SEARCH_DEFAULT_PROVIDER searxng "${env_file}"
-    set_env_key WEB_SEARCH_DEFAULT_CONFIG '{"searxng_base_url":"http://searxng:8080","num_results":"10"}' "${env_file}"
-    set_env_key WEB_SEARCH_DEFAULT_DISPLAY_NAME "22nd X AI web search" "${env_file}"
+    set_env_key WEB_SEARCH_DEFAULT_PROVIDER searxng "${env_file}" || die "Could not write ${env_file}."
+    set_env_key WEB_SEARCH_DEFAULT_CONFIG '{"searxng_base_url":"http://searxng:8080","num_results":"10"}' "${env_file}" ||
+      die "Could not write ${env_file}."
+    set_env_key WEB_SEARCH_DEFAULT_DISPLAY_NAME "22nd X AI web search" "${env_file}" || die "Could not write ${env_file}."
     echo "Set WEB_SEARCH_DEFAULT_PROVIDER=searxng, WEB_SEARCH_DEFAULT_CONFIG and WEB_SEARCH_DEFAULT_DISPLAY_NAME in ${env_file}."
   else
     echo "${env_file} has WEB_SEARCH_DEFAULT_PROVIDER already: the web search default stays."
   fi
-  stack_env_pin_compose "${env_file}" "${SAAS_PROJECT}" "${SAAS_COMPOSE_FILES[@]}"
+  stack_env_pin_compose "${env_file}" "${SAAS_PROJECT}" "${SAAS_COMPOSE_FILES[@]}" ||
+    die "Could not set COMPOSE_PROJECT_NAME and COMPOSE_FILE in ${env_file}."
   stack_env_settings "${env_file}"
   saas_model_defaults "${env_file}"
   saas_merge_secrets "${env_file}"
+}
+
+# stack_env_pin, or stop: the actions run without errexit.
+pin_or_die() {
+  stack_env_pin "$@" || die "Could not set $2 in $1."
 }
 
 # Writes the KEY=value lines of secrets/saas.env into the saas .env. The log shows key names only.
@@ -2085,7 +2095,7 @@ saas_merge_secrets() {
     if [[ "${value}" =~ ^\"(.*)\"$ || "${value}" =~ ^\'(.*)\'$ ]]; then
       value="${BASH_REMATCH[1]}"
     fi
-    set_env_key "${key}" "${value}" "${env_file}"
+    set_env_key "${key}" "${value}" "${env_file}" || die "Could not write ${key} into ${env_file}."
     keys+=" ${key}"
   done <"${file}"
   echo "Set from ${file} (values not shown):${keys}"
@@ -2096,7 +2106,7 @@ saas_merge_secrets() {
 saas_copy_https_files() {
   local sha="$1"
   section "certificate and nginx files"
-  mkdir -p "${SAAS_DATA_DIR}/certbot" "${SAAS_DATA_DIR}/nginx-extra"
+  mkdir -p "${SAAS_DATA_DIR}/certbot" "${SAAS_DATA_DIR}/nginx-extra" || die "Could not create ${SAAS_DATA_DIR}."
   if sudo -n test -d "${SAAS_DATA_DIR}/certbot/conf"; then
     echo "${SAAS_DATA_DIR}/certbot/conf exists. The script keeps it."
   else
@@ -2112,7 +2122,7 @@ saas_copy_https_files() {
     "${SAAS_DATA_DIR}/nginx-extra/render-redirect.sh" ||
     die "sudo -n cannot write ${SAAS_DATA_DIR}/nginx-extra/render-redirect.sh."
   echo "Copied nginx-extra/ and installed render-redirect.sh from ${sha}."
-  ls -la "${SAAS_DATA_DIR}/nginx-extra"
+  ls -la "${SAAS_DATA_DIR}/nginx-extra" || true
 }
 
 # ----- rollback
@@ -2303,6 +2313,7 @@ SAAS_UPDATE_DONE=0
 # axi-deploy-dev.yml never touches onyx-saas.
 saas_update() {
   local sha="$1" mode="$2" new_tag current_tag unchanged=0 executor_image
+  trap 'on_saas_update_exit' EXIT
   section "vm-bootstrap saas-update ${sha} $(date -u +%FT%TZ) (mode=${mode:-same-release})"
   docker_setup
   saas_must_serve
@@ -2318,7 +2329,6 @@ saas_update() {
   elif [[ "${mode}" == release-change ]]; then
     echo "The release stays ${new_tag}: no backup for a release change."
   fi
-  trap 'on_saas_update_exit' EXIT
   saas_update_snapshot || die "The rollback snapshot could not be written. Nothing was changed."
   PLATFORM_KEY_CHANGED=0
   saas_prepare "${sha}"
@@ -2328,6 +2338,7 @@ saas_update() {
     echo "The .env, the compose files and the tool configs are equal to the snapshot."
   fi
   executor_image="$(stack_env_value "${SAAS_COMPOSE_DIR}/.env" PYTHON_EXECUTOR_IMAGE)"
+  [[ -n "${executor_image}" ]] || die "PYTHON_EXECUTOR_IMAGE is empty in ${SAAS_COMPOSE_DIR}/.env."
   section "executor image on the executor daemon ($(ci_marker_value EXECUTOR_MODE))"
   executor_docker pull --quiet "${executor_image}" || die "The executor image could not be pulled into the executor daemon."
   section "docker compose -p ${SAAS_PROJECT} pull"
@@ -2448,7 +2459,7 @@ saas_update_rollback() {
     done
   fi
   section "docker compose -p ${SAAS_PROJECT} up -d (snapshot files)"
-  stack_compose "${SAAS_PROJECT}" "${SAAS_COMPOSE_DIR}" "${files}" up -d --remove-orphans || return 1
+  stack_compose "${SAAS_PROJECT}" "${SAAS_COMPOSE_DIR}" "${files}" up -d || return 1
   wait_health "${SAAS_URL}" || return 1
   PUBLIC_URL="${SAAS_URL}"
   check_public_url || return 1
@@ -2569,47 +2580,41 @@ print("all probes passed")
 PY
 }
 
-# The running containers must run the images that .env pins (compose ps --format json).
+# The running containers must run the images that .env pins. The check compares image IDs
+# (the container's image against "docker image inspect <pin>"), so the spelling of the
+# reference does not matter. It also prints the Image field of "compose ps --format json".
 saas_images_match_pins() {
+  local env_file="${SAAS_COMPOSE_DIR}/.env" service key pin cid running_id pin_id state bad=0
   section "running images against the pins"
-  saas_compose ps --format json | python3 - "${SAAS_COMPOSE_DIR}/.env" <<'PY'
-import json
-import re
-import sys
-
-pins = {}
-for line in open(sys.argv[1]):
-    match = re.match(r"^\s*([A-Z_]+)\s*=\s*(.*)$", line.rstrip("\n"))
-    if match:
-        pins[match.group(1)] = match.group(2).strip().strip("'\"")
-expected = {
-    "api_server": pins.get("ONYX_BACKEND_IMAGE"),
-    "background": pins.get("ONYX_BACKEND_IMAGE"),
-    "web_server": pins.get("ONYX_WEB_SERVER_IMAGE"),
-    "inference_model_server": pins.get("ONYX_MODEL_SERVER_IMAGE"),
-    "indexing_model_server": pins.get("ONYX_MODEL_SERVER_IMAGE"),
-    "code-interpreter": pins.get("CODE_INTERPRETER_IMAGE"),
-    "ci-gateway": pins.get("CI_GATEWAY_IMAGE"),
-    "searxng": pins.get("SEARXNG_IMAGE"),
-}
+  saas_compose ps --format json 2>/dev/null | python3 -c '
+import json, sys
 raw = sys.stdin.read().strip()
-rows = []
-if raw:
-    try:
-        data = json.loads(raw)
-        rows = data if isinstance(data, list) else [data]
-    except json.JSONDecodeError:
-        rows = [json.loads(line) for line in raw.splitlines() if line.strip()]
-seen = {row.get("Service"): (row.get("Image"), row.get("State")) for row in rows}
-bad = []
-for service, pin in expected.items():
-    image, state = seen.get(service, (None, None))
-    ok = bool(pin) and image == pin and state == "running"
-    print(("ok   " if ok else "FAIL ") + f"{service}: {image} ({state})")
-    if not ok:
-        bad.append(service)
-sys.exit(1 if bad else 0)
-PY
+try:
+    rows = json.loads(raw) if raw.startswith("[") else [json.loads(l) for l in raw.splitlines() if l.strip()]
+except ValueError:
+    rows = []
+for row in rows:
+    print("  %s: %s (%s)" % (row.get("Service"), row.get("Image"), row.get("State")))
+' || true
+  for service in api_server:ONYX_BACKEND_IMAGE background:ONYX_BACKEND_IMAGE \
+    web_server:ONYX_WEB_SERVER_IMAGE inference_model_server:ONYX_MODEL_SERVER_IMAGE \
+    indexing_model_server:ONYX_MODEL_SERVER_IMAGE code-interpreter:CODE_INTERPRETER_IMAGE \
+    ci-gateway:CI_GATEWAY_IMAGE searxng:SEARXNG_IMAGE; do
+    key="${service#*:}"
+    service="${service%%:*}"
+    pin="$(stack_env_value "${env_file}" "${key}")"
+    cid="$(saas_compose ps -q "${service}" 2>/dev/null | head -n 1)"
+    state="$([[ -z "${cid}" ]] || dk inspect --format '{{.State.Status}}' "${cid}" 2>/dev/null)"
+    running_id="$([[ -z "${cid}" ]] || dk inspect --format '{{.Image}}' "${cid}" 2>/dev/null)"
+    pin_id="$([[ -z "${pin}" ]] || dk image inspect --format '{{.Id}}' "${pin}" 2>/dev/null)"
+    if [[ -n "${pin}" && "${state}" == running && -n "${pin_id}" && "${running_id}" == "${pin_id}" ]]; then
+      echo "ok   ${service}: ${pin}"
+    else
+      echo "FAIL ${service}: pin ${key}=${pin:-missing}, state ${state:-missing}, image ${running_id:-?} (pin ${pin_id:-not local})"
+      bad=1
+    fi
+  done
+  ((bad == 0))
 }
 
 # Writes deployed.env: the SHA, the time, the release and the image refs. No secrets.
@@ -2650,6 +2655,876 @@ saas_down() {
   saas_stop
   show "volumes kept (${SAAS_PROJECT})" dk volume ls --filter "label=com.docker.compose.project=${SAAS_PROJECT}"
   echo "Start the old service again with the rollback action, or the new one with cutover."
+}
+
+# ---------------------------------------------------------------- code interpreter executor host
+
+# Prints one value of the ci-host-setup marker, or nothing.
+ci_marker_value() {
+  [[ -f "${CI_MARKER_FILE}" ]] || return 0
+  sed -n -E "s/^${1}=//p" "${CI_MARKER_FILE}" | tail -n 1
+}
+
+# Stops unless ci-host-setup wrote a complete marker. saas_prepare pins DOCKER_SOCK_PATH from it.
+saas_require_marker() {
+  [[ -f "${CI_MARKER_FILE}" ]] || die "${CI_MARKER_FILE} is missing: run ci-host-setup first. Nothing was changed."
+  [[ "$(ci_marker_value DOCKER_SOCK_PATH)" == /* ]] ||
+    die "DOCKER_SOCK_PATH is missing in ${CI_MARKER_FILE}: run ci-host-setup first. Nothing was changed."
+  [[ "$(ci_marker_value EXECUTOR_MODE)" =~ ^(rootless|main-socket)$ ]] ||
+    die "EXECUTOR_MODE in ${CI_MARKER_FILE} is not rootless or main-socket: run ci-host-setup first. Nothing was changed."
+}
+
+# Docker on the executor daemon of the marker, as root: the rootless socket belongs to the
+# user ci-sandbox, and the code interpreter container (root) reaches it the same way.
+executor_docker() {
+  local sock
+  sock="$(ci_marker_value DOCKER_SOCK_PATH)"
+  [[ -n "${sock}" ]] || { echo "ERROR: no DOCKER_SOCK_PATH in ${CI_MARKER_FILE}." >&2; return 1; }
+  sudo -n env DOCKER_HOST="unix://${sock}" docker "$@"
+}
+
+# The systemd unit that caps all executors together.
+ci_cap_unit() {
+  if [[ "$(ci_marker_value EXECUTOR_MODE)" == rootless ]]; then
+    echo "user-$(ci_marker_value EXECUTOR_UID).slice"
+  else
+    echo "code-exec.slice"
+  fi
+}
+
+# main-socket: the executors go into code-exec.slice. Appends the flag to CI_EXECUTOR_RUN_ARGS.
+ci_env_add_cgroup_parent() {
+  local env_file="$1" args
+  args="$(stack_env_value "${env_file}" CI_EXECUTOR_RUN_ARGS)"
+  [[ -n "${args}" ]] || args="${CI_EXECUTOR_RUN_ARGS_DEFAULT}"
+  [[ " ${args} " == *" ${CI_CGROUP_PARENT_ARG} "* ]] || args+=" ${CI_CGROUP_PARENT_ARG}"
+  set_env_key CI_EXECUTOR_RUN_ARGS "${args}" "${env_file}"
+}
+
+# rootless: the user slice of ci-sandbox holds the cap. Removes the flag again.
+ci_env_drop_cgroup_parent() {
+  local env_file="$1" args
+  args="$(stack_env_value "${env_file}" CI_EXECUTOR_RUN_ARGS)"
+  [[ " ${args} " == *" ${CI_CGROUP_PARENT_ARG} "* ]] || return 0
+  args=" ${args} "
+  args="${args// ${CI_CGROUP_PARENT_ARG} / }"
+  args="${args# }"
+  args="${args% }"
+  set_env_key CI_EXECUTOR_RUN_ARGS "${args}" "${env_file}"
+}
+
+# Appends the sha256 of <key> to KEY_FINGERPRINTS_FILE (mode 600, one hex digest per line,
+# no duplicates). The key reaches sha256sum through a pipe only; nothing prints it.
+record_key_fingerprint() {
+  local fingerprint
+  fingerprint="$(printf '%s' "$1" | sha256sum | cut -d' ' -f1)" || return 1
+  [[ "${fingerprint}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ -d "${SECRETS_DIR}" ]] || install -d -m 700 "${SECRETS_DIR}" || return 1
+  if [[ ! -f "${KEY_FINGERPRINTS_FILE}" ]]; then
+    (umask 077 && : >"${KEY_FINGERPRINTS_FILE}") || return 1
+  fi
+  chmod 600 "${KEY_FINGERPRINTS_FILE}" || return 1
+  grep -qxF "${fingerprint}" "${KEY_FINGERPRINTS_FILE}" && return 0
+  echo "${fingerprint}" >>"${KEY_FINGERPRINTS_FILE}"
+}
+
+# True when the Debian package is installed.
+package_installed() {
+  # shellcheck disable=SC2016
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'
+}
+
+# Host facts for the code interpreter executors (inspect). No secrets: the marker holds paths.
+ci_host_facts() {
+  local uid pkg
+  echo "kernel: $(uname -r)"
+  echo "cgroup file system: $(stat -fc %T /sys/fs/cgroup 2>/dev/null || echo unknown)"
+  echo "cgroup controllers: $(cat /sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo unknown)"
+  echo "kernel.unprivileged_userns_clone: $(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo n/a)"
+  echo "kernel.apparmor_restrict_unprivileged_userns: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo n/a)"
+  echo "user.max_user_namespaces: $(sysctl -n user.max_user_namespaces 2>/dev/null || echo n/a)"
+  for pkg in uidmap slirp4netns dbus-user-session docker-ce-rootless-extras; do
+    if package_installed "${pkg}"; then echo "package ${pkg}: installed"; else echo "package ${pkg}: missing"; fi
+  done
+  echo "dockerd-rootless-setuptool.sh: $(command -v dockerd-rootless-setuptool.sh || echo missing)"
+  echo "-- /etc/docker/daemon.json"
+  cat /etc/docker/daemon.json 2>/dev/null || echo "missing"
+  echo
+  echo "main daemon: $({ docker info --format '{{.ServerVersion}}, cgroup driver {{.CgroupDriver}}, cgroup v{{.CgroupVersion}}, root {{.DockerRootDir}}' 2>/dev/null ||
+    sudo -n docker info --format '{{.ServerVersion}}, cgroup driver {{.CgroupDriver}}, cgroup v{{.CgroupVersion}}, root {{.DockerRootDir}}' 2>/dev/null; } || echo unknown)"
+  echo "-- ${CI_MARKER_FILE}"
+  grep -E '^(DOCKER_SOCK_PATH|EXECUTOR_MODE|EXECUTOR_UID|EXECUTOR_CAP)=' "${CI_MARKER_FILE}" 2>/dev/null || echo "missing"
+  if uid="$(id -u "${CI_SANDBOX_USER}" 2>/dev/null)"; then
+    echo "user ${CI_SANDBOX_USER}: uid ${uid}, linger $(loginctl show-user "${CI_SANDBOX_USER}" -p Linger --value 2>/dev/null || echo unknown)"
+    echo "subuid ranges: $(grep -c "^${CI_SANDBOX_USER}:" /etc/subuid 2>/dev/null || true), subgid ranges: $(grep -c "^${CI_SANDBOX_USER}:" /etc/subgid 2>/dev/null || true)"
+    echo "delegated controllers: $(cat "/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers" 2>/dev/null || echo unknown)"
+    echo "user-${uid}.slice: $(systemctl show "user-${uid}.slice" -p MemoryMax -p CPUQuotaPerSecUSec -p TasksMax 2>/dev/null | tr '\n' ' ')"
+    echo "rootless socket /run/user/${uid}/docker.sock: $(sudo -n test -S "/run/user/${uid}/docker.sock" 2>/dev/null && echo present || echo missing)"
+  else
+    echo "user ${CI_SANDBOX_USER}: missing"
+  fi
+  echo "code-exec.slice: $(systemctl show code-exec.slice -p LoadState -p MemoryMax -p CPUQuotaPerSecUSec -p TasksMax 2>/dev/null | tr '\n' ' ')"
+  echo "ci-cleanup.timer: $(systemctl is-active ci-cleanup.timer 2>/dev/null || true), $(systemctl is-enabled ci-cleanup.timer 2>/dev/null || true)"
+  echo "memory: $(awk '/^(MemTotal|MemAvailable|SwapTotal):/ { printf "%s %d MiB  ", $1, $2 / 1024 }' /proc/meminfo)"
+  echo "disk: $(df -Ph "${SRV_ROOT}" 2>/dev/null | awk 'NR == 2 { print $4 " free of " $2 }')"
+}
+
+ci_host_setup_wrapper() {
+  local sha="${1:-}" mode="${2:-}"
+  check_sha "${sha}"
+  [[ -z "${mode}" || "${mode}" == main-socket ]] || die "The second argument must be main-socket or empty."
+  with_evidence ci-host-setup ci_host_setup "${sha}" "${mode}"
+}
+
+# Creates the Docker daemon of the code interpreter executors. Idempotent.
+# Default: a rootless daemon of the user ci-sandbox; its user slice caps all executors
+# together. With main-socket, or when a rootless step fails: the main daemon, with the
+# executors in code-exec.slice (the same cap). Both modes pre-pull the executor image, test
+# one executor run, install the cleanup timer and write the marker ci-executor.env.
+# saas-update applies the marker to the stack (DOCKER_SOCK_PATH, CI_EXECUTOR_RUN_ARGS).
+ci_host_setup() {
+  local sha="$1" mode="$2" image ci_image
+  section "vm-bootstrap ci-host-setup ${sha} $(date -u +%FT%TZ) (mode=${mode:-rootless})"
+  have_sudo || die "sudo -n is denied for $(id -un). ci-host-setup needs sudo without a password."
+  docker_setup
+  checkout_source "${sha}" || die "The checkout of ${sha} failed."
+  image="$(release_value PYTHON_EXECUTOR_IMAGE)"
+  ci_image="$(release_value CODE_INTERPRETER_IMAGE)"
+  [[ "${image}" =~ @sha256:[0-9a-f]{64}$ ]] || die "PYTHON_EXECUTOR_IMAGE in release.env is not a digest reference."
+  [[ "${ci_image}" =~ @sha256:[0-9a-f]{64}$ ]] || die "CODE_INTERPRETER_IMAGE in release.env is not a digest reference."
+  if [[ "${mode}" == main-socket ]]; then
+    echo "main-socket was requested: no rootless daemon."
+  elif ci_rootless_setup "${image}" "${ci_image}"; then
+    mode=rootless
+  else
+    echo "WARNING: the rootless executor daemon could not be set up (see the ERROR above). ci-host-setup falls back to the main Docker socket." >&2
+    mode=main-socket
+  fi
+  if [[ "${mode}" == main-socket ]]; then
+    ci_main_socket_setup "${image}" "${ci_image}" ||
+      die "The executor setup on the main Docker daemon failed. ${CI_MARKER_FILE} was not changed."
+  fi
+  ci_cleanup_install || die "The cleanup timer could not be installed."
+  section "ci-host-setup complete"
+  echo "mode: $(ci_marker_value EXECUTOR_MODE)"
+  echo "socket: $(ci_marker_value DOCKER_SOCK_PATH)"
+  echo "cap of all executors together: ${CI_CAP[*]} ($(ci_cap_unit))"
+  echo "cap of one run: ${CI_EXECUTOR_RUN_ARGS_DEFAULT}, memory 512m, pids 64, CPU time 60 s, wall time 60 s, no network"
+  [[ "$(ci_marker_value EXECUTOR_MODE)" != main-socket ]] || ci_main_socket_warning
+  echo "saas-update applies the marker to ${SAAS_PROJECT} (DOCKER_SOCK_PATH, CI_EXECUTOR_RUN_ARGS)."
+}
+
+ci_main_socket_warning() {
+  echo "WARNING: EXECUTOR_MODE=main-socket. The code interpreter API container holds the host Docker socket, which is root-equivalent: a flaw in the API (no authentication; only ci-gateway reaches it) or in Docker gives root on the VM and the data of every company. Run ci-host-setup without main-socket when the host supports the rootless daemon." >&2
+}
+
+# Runs a command as ci-sandbox in its systemd user session. Its shell is nologin, so no
+# login shell (sudo -i) is used.
+ci_sandbox_run() {
+  local uid="$1" home="$2"
+  shift 2
+  (cd / && sudo -n -u "${CI_SANDBOX_USER}" env HOME="${home}" XDG_RUNTIME_DIR="/run/user/${uid}" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" \
+    PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin "$@")
+}
+
+# Waits up to <seconds> until <path> is a socket. sudo: /run/user/<uid> is mode 700.
+wait_socket() {
+  local path="$1" deadline=$((SECONDS + $2))
+  until sudo -n test -S "${path}"; do
+    ((SECONDS < deadline)) || return 1
+    sleep 2
+  done
+}
+
+# Writes <content> into the root-owned <file> when it differs. Returns 0 when the file
+# changed, 1 when it was already equal, 2 on an error.
+write_root_file() {
+  local file="$1" content="$2"
+  [[ "$(sudo -n cat "${file}" 2>/dev/null)" != "${content}" ]] || return 1
+  sudo -n install -d -m 755 "$(dirname "${file}")" || return 2
+  printf '%s\n' "${content}" | sudo -n tee "${file}" >/dev/null || return 2
+  echo "wrote ${file}"
+}
+
+# The rootless daemon of ci-sandbox. Every failed step prints an ERROR and returns 1.
+ci_rootless_setup() {
+  local image="$1" ci_image="$2" uid home sock controllers controller pkg info code=0
+  local -a missing=()
+  section "rootless executor daemon of the user ${CI_SANDBOX_USER}"
+  [[ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" == cgroup2fs ]] ||
+    { echo "ERROR: cgroup v2 is not mounted at /sys/fs/cgroup. The rootless limits need it." >&2; return 1; }
+  if [[ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" == 1 ]]; then
+    echo "ERROR: kernel.apparmor_restrict_unprivileged_userns=1. rootlesskit then needs an AppArmor profile, which this script does not install." >&2
+    return 1
+  fi
+  for pkg in uidmap slirp4netns dbus-user-session docker-ce-rootless-extras; do
+    package_installed "${pkg}" || missing+=("${pkg}")
+  done
+  if ((${#missing[@]})); then
+    echo "installing ${missing[*]}"
+    sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -y -q update >/dev/null ||
+      { echo "ERROR: apt-get update failed." >&2; return 1; }
+    sudo -n env DEBIAN_FRONTEND=noninteractive apt-get -y -q install "${missing[@]}" ||
+      { echo "ERROR: apt-get install ${missing[*]} failed." >&2; return 1; }
+  else
+    echo "packages uidmap, slirp4netns, dbus-user-session, docker-ce-rootless-extras: installed"
+  fi
+  command -v dockerd-rootless-setuptool.sh >/dev/null ||
+    { echo "ERROR: dockerd-rootless-setuptool.sh is missing (docker-ce-rootless-extras)." >&2; return 1; }
+
+  if ! id -u "${CI_SANDBOX_USER}" >/dev/null 2>&1; then
+    sudo -n useradd --create-home --shell /usr/sbin/nologin --comment "Code Interpreter executors" \
+      "${CI_SANDBOX_USER}" || { echo "ERROR: useradd ${CI_SANDBOX_USER} failed." >&2; return 1; }
+    echo "created the user ${CI_SANDBOX_USER}"
+  fi
+  uid="$(id -u "${CI_SANDBOX_USER}")" || return 1
+  home="$(getent passwd "${CI_SANDBOX_USER}" | cut -d: -f6)"
+  [[ -n "${home}" ]] || { echo "ERROR: ${CI_SANDBOX_USER} has no home folder." >&2; return 1; }
+  echo "user ${CI_SANDBOX_USER}: uid ${uid}, home ${home}"
+  ci_ensure_subids || { echo "ERROR: the subordinate uid or gid range of ${CI_SANDBOX_USER} could not be added." >&2; return 1; }
+
+  # Without cpu, memory and pids delegation, the rootless daemon discards --cpus, --memory and
+  # --pids-limit. A changed delegation applies after a restart of the user manager.
+  write_root_file /etc/systemd/system/user@.service.d/delegate.conf \
+    "$(printf '%s\n' '[Service]' 'Delegate=cpu cpuset io memory pids')" || code=$?
+  ((code != 2)) || { echo "ERROR: delegate.conf could not be written." >&2; return 1; }
+  if ((code == 0)); then
+    sudo -n systemctl daemon-reload || return 1
+  fi
+  sudo -n loginctl enable-linger "${CI_SANDBOX_USER}" || { echo "ERROR: loginctl enable-linger failed." >&2; return 1; }
+  if ((code == 0)) && systemctl is-active --quiet "user@${uid}.service"; then
+    sudo -n systemctl restart "user@${uid}.service" || { echo "ERROR: the restart of user@${uid}.service failed." >&2; return 1; }
+  fi
+  sudo -n systemctl start "user@${uid}.service" || { echo "ERROR: user@${uid}.service does not start." >&2; return 1; }
+  wait_socket "/run/user/${uid}/bus" 60 ||
+    { echo "ERROR: the user bus /run/user/${uid}/bus did not appear (dbus-user-session)." >&2; return 1; }
+  controllers="$(cat "/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.controllers" 2>/dev/null || true)"
+  for controller in cpu memory pids; do
+    [[ " ${controllers} " == *" ${controller} "* ]] ||
+      { echo "ERROR: the cgroup controller ${controller} is not delegated to user@${uid}.service (${controllers:-none})." >&2; return 1; }
+  done
+  echo "delegated controllers of user@${uid}.service: ${controllers}"
+
+  sock="/run/user/${uid}/docker.sock"
+  if ci_sandbox_run "${uid}" "${home}" systemctl --user is-active --quiet docker.service; then
+    echo "the rootless daemon runs (docker.service of the user manager of ${CI_SANDBOX_USER})"
+  else
+    echo "dockerd-rootless-setuptool.sh install"
+    ci_sandbox_run "${uid}" "${home}" dockerd-rootless-setuptool.sh install ||
+      { echo "ERROR: dockerd-rootless-setuptool.sh install failed (see above)." >&2; return 1; }
+  fi
+  ci_sandbox_run "${uid}" "${home}" systemctl --user enable docker.service >/dev/null 2>&1 ||
+    { echo "ERROR: systemctl --user enable docker.service failed." >&2; return 1; }
+  wait_socket "${sock}" 90 || { echo "ERROR: ${sock} did not appear within 90 s." >&2; return 1; }
+  info="$(sudo -n env DOCKER_HOST="unix://${sock}" docker info --format \
+    '{{.ServerVersion}} cgroup driver {{.CgroupDriver}}, cgroup v{{.CgroupVersion}}, {{json .SecurityOptions}}' 2>&1)" ||
+    { echo "ERROR: the rootless daemon does not answer: ${info}" >&2; return 1; }
+  echo "rootless daemon: ${info}"
+  [[ "${info}" == *name=rootless* ]] || { echo "ERROR: ${sock} is not a rootless daemon." >&2; return 1; }
+
+  # The global cap: every executor of every company together, plus the daemon itself.
+  sudo -n systemctl set-property "user-${uid}.slice" "${CI_CAP[@]}" ||
+    { echo "ERROR: systemctl set-property user-${uid}.slice failed." >&2; return 1; }
+  echo "cap of user-${uid}.slice: $(systemctl show "user-${uid}.slice" -p MemoryMax -p CPUQuotaPerSecUSec -p TasksMax | tr '\n' ' ')"
+
+  sudo -n env DOCKER_HOST="unix://${sock}" docker pull --quiet "${image}" ||
+    { echo "ERROR: the executor image could not be pulled into the rootless daemon." >&2; return 1; }
+  ci_executor_selftest "unix://${sock}" "${image}" "${CI_EXECUTOR_RUN_ARGS_DEFAULT}" || return 1
+  ci_socket_check "${sock}" "${ci_image}" || return 1
+  ci_write_marker "${sock}" rootless "${uid}" || { echo "ERROR: ${CI_MARKER_FILE} could not be written." >&2; return 1; }
+}
+
+# Gives ci-sandbox 65536 subordinate uids and gids once (its user namespace).
+ci_ensure_subids() {
+  local file start option
+  for file in /etc/subuid /etc/subgid; do
+    if grep -q "^${CI_SANDBOX_USER}:" "${file}" 2>/dev/null; then
+      echo "${file}: ${CI_SANDBOX_USER} has a range"
+      continue
+    fi
+    # The first id after all existing ranges, at least 100000 (as useradd does).
+    start="$(awk -F: 'BEGIN { m = 100000 } NF >= 3 { e = $2 + $3; if (e > m) m = e } END { print m }' "${file}" 2>/dev/null || echo 100000)"
+    option=--add-subuids
+    [[ "${file}" == /etc/subuid ]] || option=--add-subgids
+    sudo -n usermod "${option}" "${start}-$((start + 65535))" "${CI_SANDBOX_USER}" || return 1
+    echo "${file}: added ${start}-$((start + 65535)) for ${CI_SANDBOX_USER}"
+  done
+}
+
+# The fallback: executors on the main daemon, in code-exec.slice with the global cap.
+ci_main_socket_setup() {
+  local image="$1" ci_image="$2" driver code=0
+  section "executors on the main Docker daemon (main-socket)"
+  ci_main_socket_warning
+  driver="$(dk info --format '{{.CgroupDriver}}' 2>/dev/null || true)"
+  [[ "${driver}" == systemd ]] ||
+    { echo "ERROR: the main daemon uses the cgroup driver '${driver}'. --cgroup-parent=code-exec.slice needs the systemd driver." >&2; return 1; }
+  write_root_file /etc/systemd/system/code-exec.slice "$(printf '%s\n' '[Unit]' \
+    'Description=Code Interpreter executor containers (22nd X AI)' 'Before=slices.target' '' '[Slice]' "${CI_CAP[@]}")" || code=$?
+  ((code != 2)) || { echo "ERROR: code-exec.slice could not be written." >&2; return 1; }
+  if ((code == 0)); then
+    sudo -n systemctl daemon-reload || return 1
+  fi
+  sudo -n systemctl start code-exec.slice || { echo "ERROR: code-exec.slice does not start." >&2; return 1; }
+  echo "cap of code-exec.slice: $(systemctl show code-exec.slice -p MemoryMax -p CPUQuotaPerSecUSec -p TasksMax | tr '\n' ' ')"
+  dk pull --quiet "${image}" >/dev/null || { echo "ERROR: the executor image could not be pulled." >&2; return 1; }
+  ci_executor_selftest unix:///var/run/docker.sock "${image}" \
+    "${CI_EXECUTOR_RUN_ARGS_DEFAULT} ${CI_CGROUP_PARENT_ARG}" || return 1
+  ci_socket_check /var/run/docker.sock "${ci_image}" || return 1
+  ci_write_marker /var/run/docker.sock main-socket "" || { echo "ERROR: ${CI_MARKER_FILE} could not be written." >&2; return 1; }
+}
+
+# The python code of the executor test run: uid, network, and the limits in its cgroup.
+readonly CI_SELFTEST_CODE='import os, socket
+path = open("/proc/self/cgroup").read().strip().split("::", 1)[-1]
+limits = []
+for name in ("memory.max", "cpu.max", "pids.max"):
+    try:
+        limits.append(name + "=" + open("/sys/fs/cgroup" + path + "/" + name).read().strip().replace(" ", "/"))
+    except OSError:
+        limits.append(name + "=unreadable")
+try:
+    socket.create_connection(("1.1.1.1", 80), 3).close()
+    network = "open"
+except OSError:
+    network = "blocked"
+print("uid=%d network=%s %s" % (os.getuid(), network, " ".join(limits)))'
+
+# One executor run with the docker run flags of the code interpreter (0.4.7) and <run args>
+# on <docker host>. Fails on a Docker warning (a discarded limit), a wrong uid, an open
+# network, or a limit in the cgroup that differs from the flags.
+ci_executor_selftest() {
+  local host="$1" image="$2" run_args="$3" out err_file errors="" expected
+  local -a extra=()
+  read -r -a extra <<<"${run_args}"
+  section "executor test run on ${host}"
+  err_file="$(mktemp)" || return 1
+  out="$(sudo -n env DOCKER_HOST="${host}" docker run --rm --pull never --network none --cgroupns host \
+    --pids-limit 64 --security-opt no-new-privileges --cap-drop ALL --cap-add CHOWN \
+    --user 65532:65532 --tmpfs /tmp:rw,size=64m --ulimit cpu=60:60 --memory 512m --memory-swap 512m \
+    "${extra[@]}" "${image}" python -c "${CI_SELFTEST_CODE}" 2>"${err_file}")" ||
+    errors="docker run failed: $(tail -n 5 "${err_file}")"
+  if [[ -z "${errors}" ]] && grep -qi 'warning' "${err_file}"; then
+    errors="Docker warned (a limit may be discarded): $(grep -i 'warning' "${err_file}" | head -n 3)"
+  fi
+  rm -f "${err_file}"
+  echo "executor: ${out:-no output}"
+  if [[ -z "${errors}" ]]; then
+    [[ "${out}" == *"uid=65532 "* ]] || errors="the executor does not run as uid 65532"
+    [[ "${out}" == *"network=blocked"* ]] || errors+="${errors:+; }the executor has network access"
+    for expected in memory.max=536870912 cpu.max=100000/100000 pids.max=64; do
+      if [[ "${out}" == *"${expected%%=*}=unreadable"* ]]; then
+        echo "note: ${expected%%=*} is not visible inside the executor; the check relies on the Docker warnings."
+      elif [[ "${out}" != *"${expected}"* ]]; then
+        errors+="${errors:+; }${expected%%=*} is not ${expected#*=}"
+      fi
+    done
+  fi
+  if [[ -n "${errors}" ]]; then
+    echo "ERROR: executor test run on ${host}: ${errors}" >&2
+    return 1
+  fi
+  echo "The executor test run passed: uid 65532, no network, memory 512m, 1 CPU, 64 pids."
+}
+
+# A container on the main daemon reaches <socket> as root through a bind mount, as the code
+# interpreter container does. The mount never creates the path.
+ci_socket_check() {
+  local sock="$1" ci_image="$2" out
+  section "executor socket from a container on the main daemon"
+  dk pull --quiet "${ci_image}" >/dev/null || { echo "ERROR: ${ci_image} could not be pulled." >&2; return 1; }
+  out="$(dk run --rm --network none --user root --entrypoint docker \
+    --mount "type=bind,source=${sock},target=/var/run/docker.sock" "${ci_image}" \
+    version --format '{{.Server.Version}} {{.Server.Os}}' 2>&1)" ||
+    { echo "ERROR: the code interpreter image cannot reach ${sock}: ${out}" >&2; return 1; }
+  echo "The code interpreter image reaches the executor daemon through ${sock} (Docker ${out})."
+}
+
+# Writes the marker atomically. No secrets: paths, the mode and the cap.
+ci_write_marker() {
+  local sock="$1" mode="$2" uid="$3" tmp
+  tmp="$(mktemp "${ONYX_DEPLOY_DIR}/.ci-executor.env.XXXXXX")" || return 1
+  {
+    echo "# Written by vm-bootstrap.sh ci-host-setup on $(date -u +%FT%TZ). Read by saas_prepare and ci-cleanup.sh."
+    echo "DOCKER_SOCK_PATH=${sock}"
+    echo "EXECUTOR_MODE=${mode}"
+    echo "EXECUTOR_UID=${uid}"
+    echo "EXECUTOR_CAP=\"${CI_CAP[*]}\""
+  } >"${tmp}" || { rm -f "${tmp}"; return 1; }
+  chmod 644 "${tmp}" || { rm -f "${tmp}"; return 1; }
+  mv -f "${tmp}" "${CI_MARKER_FILE}" || { rm -f "${tmp}"; return 1; }
+  echo "Wrote ${CI_MARKER_FILE}: DOCKER_SOCK_PATH=${sock} EXECUTOR_MODE=${mode}"
+}
+
+# Installs ci-cleanup.sh (root-owned) and its systemd service and timer (every 5 minutes),
+# and runs it once.
+ci_cleanup_install() {
+  local src="${ONYX_SRC_DIR}/product/deploy/tools/ci-cleanup.sh" reload=0 code
+  section "cleanup timer (ci-cleanup.timer, every 5 minutes)"
+  [[ -s "${src}" ]] || { echo "ERROR: ${src} is missing at this commit." >&2; return 1; }
+  bash -n "${src}" || return 1
+  sudo -n install -d -o root -g root -m 755 "$(dirname "${CI_CLEANUP_BIN}")" || return 1
+  sudo -n install -o root -g root -m 755 "${src}" "${CI_CLEANUP_BIN}" || return 1
+  code=0
+  write_root_file /etc/systemd/system/ci-cleanup.service "$(printf '%s\n' '[Unit]' \
+    'Description=Clean up after the Code Interpreter (22nd X AI)' 'After=docker.service' '' \
+    '[Service]' 'Type=oneshot' "Environment=CI_EXECUTOR_MARKER=${CI_MARKER_FILE}" \
+    "Environment=CI_VM_LOCK=${VM_LOCK_FILE}" "ExecStart=${CI_CLEANUP_BIN}" 'Nice=10')" || code=$?
+  ((code != 2)) || return 1
+  ((code != 0)) || reload=1
+  code=0
+  write_root_file /etc/systemd/system/ci-cleanup.timer "$(printf '%s\n' '[Unit]' \
+    'Description=Run ci-cleanup.service every 5 minutes' '' '[Timer]' 'OnBootSec=5min' \
+    'OnUnitActiveSec=5min' 'AccuracySec=30s' '' '[Install]' 'WantedBy=timers.target')" || code=$?
+  ((code != 2)) || return 1
+  ((code != 0)) || reload=1
+  if ((reload)); then
+    sudo -n systemctl daemon-reload || return 1
+  fi
+  sudo -n systemctl enable --now ci-cleanup.timer || return 1
+  echo "first run of ci-cleanup.service:"
+  if ! sudo -n systemctl start ci-cleanup.service; then
+    sudo -n journalctl -u ci-cleanup.service -n 20 --no-pager -o cat >&2 || true
+    return 1
+  fi
+  sudo -n journalctl -u ci-cleanup.service -n 6 --no-pager -o cat || true
+}
+
+# ---------------------------------------------------------------- saas-rotate-key
+
+saas_rotate_key_wrapper() {
+  local sha="${1:-}" mode="${2:-}"
+  check_sha "${sha}"
+  [[ -z "${mode}" || "${mode}" == dry-run ]] || die "The second argument must be dry-run or empty."
+  with_evidence saas-rotate-key saas_rotate_key_action "${sha}" "${mode}"
+}
+
+saas_rotate_key_action() {
+  local sha="$1" mode="$2"
+  section "vm-bootstrap saas-rotate-key ${sha} $(date -u +%FT%TZ) (mode=${mode:-apply})"
+  docker_setup
+  saas_must_serve
+  saas_rotate_key "${mode}" || die "The platform key rotation failed."
+}
+
+# Replaces every old platform key (the fingerprints in KEY_FINGERPRINTS_FILE) with the
+# FIREWORKS_DEFAULT_API_KEY of the running api_server, in the provider rows of every
+# tenant. The fingerprints file is on the host: it reaches the container through stdin
+# (--fingerprints-file /dev/stdin). No key appears in the log; the output has counts.
+saas_rotate_key() {
+  local -a args=(--rotate-platform-key --fingerprints-file /dev/stdin)
+  [[ "${1:-}" != dry-run ]] || args+=(--dry-run)
+  section "platform key rotation (onyx.axi.backfill ${args[*]})"
+  if [[ ! -s "${KEY_FINGERPRINTS_FILE}" ]]; then
+    echo "ERROR: ${KEY_FINGERPRINTS_FILE} is missing or empty: no old key is known." >&2
+    return 1
+  fi
+  echo "old key fingerprints in ${KEY_FINGERPRINTS_FILE}: $(grep -cE '^[0-9a-f]{64}$' "${KEY_FINGERPRINTS_FILE}" || true)"
+  saas_key_presence
+  saas_compose exec -T api_server python -m onyx.axi.backfill "${args[@]}" <"${KEY_FINGERPRINTS_FILE}"
+}
+
+# ---------------------------------------------------------------- saas-backup
+
+# The newest backup folder of saas-backup, set by saas_backup.
+SAAS_LAST_BACKUP=""
+
+saas_backup_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence saas-backup saas_backup_action "${sha}"
+}
+
+saas_backup_action() {
+  local sha="$1"
+  section "vm-bootstrap saas-backup ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  saas_must_serve
+  checkout_source "${sha}" || die "The checkout of ${sha} failed. Nothing was changed."
+  saas_backup "${sha}" || die "The backup of ${SAAS_PROJECT} failed."
+  section "saas-backup complete: ${SAAS_LAST_BACKUP}"
+}
+
+# Prints the free space of the file system of <path> in kB.
+disk_free_kb() {
+  df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'
+}
+
+# Cold backup of onyx-saas into BACKUP_ROOT/<time>-saas (backup.sh) with extra/: the
+# per-tenant manifest, the compose files, the tool configs, images.txt, source-sha,
+# deployed.env, the journey state and the key fingerprints (never account-transfer.json).
+# The application services stop first, so that the manifest matches the copied volumes.
+# Downtime: about 2 minutes. The newest SAAS_BACKUP_KEEP *-saas backups stay.
+saas_backup() {
+  local sha="$1" backup_dir extra free_kb
+  docker info >/dev/null 2>&1 ||
+    { echo "ERROR: docker does not work without sudo. backup.sh needs it. Log in again after the install action." >&2; return 1; }
+  saas_compose_files_present || { echo "ERROR: the files in ${SAAS_COMPOSE_DIR} are missing." >&2; return 1; }
+  backup_dir="${BACKUP_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)-saas"
+  section "cold backup of ${SAAS_PROJECT} into ${backup_dir}"
+  echo "Expected downtime: about 2 minutes. nginx, api_server, background and web_server stop for the manifest; backup.sh stops the rest, copies the volumes and starts the stack again."
+  free_kb="$(disk_free_kb "${BACKUP_ROOT}")"
+  [[ "${free_kb}" =~ ^[0-9]+$ ]] || { echo "ERROR: the free space of ${BACKUP_ROOT} is unknown." >&2; return 1; }
+  echo "free space in ${BACKUP_ROOT}: $((free_kb / 1024)) MiB (backup.sh checks the exact need before the stop)"
+  ((free_kb >= SAAS_MIN_FREE_KB)) ||
+    { echo "ERROR: less than $((SAAS_MIN_FREE_KB / 1024)) MiB free in ${BACKUP_ROOT}. Nothing was stopped." >&2; return 1; }
+  extra="$(mktemp -d "${BACKUP_ROOT}/.saas-extra.XXXXXX")" || return 1
+  if ! saas_backup_extra "${sha}" "${extra}"; then
+    rm -rf "${extra}"
+    echo "ERROR: the extra files or the manifest failed. Starting the stopped services again." >&2
+    saas_compose start || true
+    return 1
+  fi
+  if ! BACKUP_EXTRA_DIR="${extra}" "${ONYX_SRC_DIR}/product/deploy/backup.sh" "${SAAS_COMPOSE_DIR}" "${backup_dir}" "${SAAS_PROJECT}"; then
+    rm -rf "${extra}"
+    echo "ERROR: backup.sh failed. Starting the stopped services again." >&2
+    saas_compose start || true
+    return 1
+  fi
+  rm -rf "${extra}"
+  verify_backup "${backup_dir}"
+  wait_health "${SAAS_URL}" || return 1
+  saas_prune_backups
+  SAAS_LAST_BACKUP="${backup_dir}"
+  echo "Backup: ${backup_dir} (holds .env with secrets; copy it off the VM)."
+}
+
+# Fills <extra> and writes the manifest after the application services stop.
+saas_backup_extra() {
+  local sha="$1" extra="$2" file
+  for file in "${SAAS_COMPOSE_FILES[@]}"; do
+    cp "${SAAS_COMPOSE_DIR}/${file}" "${extra}/" || return 1
+  done
+  mkdir -p "${extra}/tools" || return 1
+  for file in "${SAAS_TOOLS_FILES[@]}"; do
+    cp "${SAAS_COMPOSE_DIR}/tools/${file}" "${extra}/tools/" || return 1
+  done
+  saas_compose images >"${extra}/images.txt" || return 1
+  echo "${sha}" >"${extra}/source-sha" || return 1
+  [[ ! -f "${SAAS_DEPLOYED_FILE}" ]] || cp "${SAAS_DEPLOYED_FILE}" "${extra}/" || return 1
+  [[ ! -f "${SAAS_JOURNEY_STATE_FILE}" ]] || cp "${SAAS_JOURNEY_STATE_FILE}" "${extra}/" || return 1
+  [[ ! -f "${KEY_FINGERPRINTS_FILE}" ]] || install -m 600 "${KEY_FINGERPRINTS_FILE}" "${extra}/" || return 1
+  section "stopping the application services (manifest of the data that the backup copies)"
+  saas_compose stop nginx api_server background web_server || return 1
+  saas_manifest saas_psql >"${extra}/manifest.tsv" || return 1
+  [[ -s "${extra}/manifest.tsv" ]] || return 1
+  echo "manifest: $(grep -c . "${extra}/manifest.tsv") rows, $(cut -f1 "${extra}/manifest.tsv" | sort -u | grep -c '^tenant_' || true) tenant schemas"
+}
+
+# Prints the manifest through <psql function>: one row per tenant schema and item
+# (schema TAB item TAB value). The items are row counts, and the server_enabled values of
+# code_interpreter_server. A missing table gives "missing".
+saas_manifest() {
+  "$1" <<'SQL'
+\pset fieldsep '\t'
+SELECT q FROM (
+  SELECT 0 AS o, '' AS s, '' AS l,
+    'SELECT ''public'', ''user_tenant_mapping'', count(*)::text FROM public.user_tenant_mapping' AS q
+  UNION ALL
+  SELECT 1, n.nspname, m.label,
+    CASE WHEN to_regclass(format('%I.%I', n.nspname, m.tbl)) IS NULL
+      THEN format('SELECT %L, %L, %L', n.nspname, m.label, 'missing')
+      ELSE format('SELECT %L, %L, (%s)::text FROM %I.%I', n.nspname, m.label, m.expr, n.nspname, m.tbl)
+    END
+  FROM pg_namespace AS n
+  CROSS JOIN (VALUES
+    ('user', 'users', 'count(*)'),
+    ('chat_session', 'chat_session', 'count(*)'),
+    ('chat_message', 'chat_message', 'count(*)'),
+    ('document', 'document', 'count(*)'),
+    ('user_file', 'user_file', 'count(*)'),
+    ('llm_provider', 'llm_provider', 'count(*)'),
+    ('internet_search_provider', 'internet_search_provider', 'count(*)'),
+    ('code_interpreter_server', 'code_interpreter_server_enabled',
+      'coalesce(string_agg(server_enabled::text, '','' ORDER BY id), ''none'')'),
+    ('key_value_store', 'key_value_store', 'count(*)')
+  ) AS m (tbl, label, expr)
+  WHERE n.nspname LIKE 'tenant\_%'
+) AS g ORDER BY o, s, l
+\gexec
+SQL
+}
+
+# Removes the oldest *-saas backups; the newest SAAS_BACKUP_KEEP stay.
+saas_prune_backups() {
+  local dir
+  find "${BACKUP_ROOT}" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended \
+    -regex '.*/[0-9]{8}T[0-9]{6}Z-saas' | sort | head -n "-${SAAS_BACKUP_KEEP}" |
+    while IFS= read -r dir; do
+      if rm -rf "${dir}"; then
+        echo "Removed the old backup ${dir}."
+      else
+        echo "WARNING: could not remove the old backup ${dir}." >&2
+      fi
+    done
+}
+
+# ---------------------------------------------------------------- saas-restore-test
+
+# State of saas_restore_test for on_saas_restore_test_exit.
+SAAS_RESTORE_TOOLS_STOPPED=0
+SAAS_RESTORE_IDS_BEFORE=""
+SAAS_RESTORE_PASSED=0
+
+saas_restore_guard() {
+  [[ "${SAAS_RESTORE_PROJECT}" == onyx-saas-restore && "${SAAS_RESTORE_DIR}" == */onyx-saas-restore ]] ||
+    die "The restore copy must be project onyx-saas-restore in a folder onyx-saas-restore."
+}
+
+saas_restore_compose() {
+  saas_restore_guard
+  stack_compose "${SAAS_RESTORE_PROJECT}" "${SAAS_RESTORE_COMPOSE_DIR}" "$(join_colon "${SAAS_RESTORE_FILES[@]}")" "$@"
+}
+
+# Like saas_psql, in the database of the copy.
+saas_restore_psql() {
+  local env_file="${SAAS_RESTORE_COMPOSE_DIR}/.env" user db
+  user="$(stack_env_value "${env_file}" POSTGRES_USER)"
+  db="$(stack_env_value "${env_file}" POSTGRES_DB)"
+  saas_restore_compose exec -T relational_db psql -U "${user:-postgres}" -d "${db:-postgres}" \
+    -v ON_ERROR_STOP=1 -qAt -f -
+}
+
+saas_newest_backup() {
+  find "${BACKUP_ROOT}" -mindepth 1 -maxdepth 1 -type d -regextype posix-extended \
+    -regex '.*/[0-9]{8}T[0-9]{6}Z-saas' 2>/dev/null | sort | tail -n 1
+}
+
+saas_restore_test_wrapper() {
+  local sha="${1:-}" backup="${2:-}"
+  check_sha "${sha}"
+  [[ -z "${backup}" || "${backup}" =~ ^${BACKUP_ROOT}/[A-Za-z0-9_.-]+$ ]] ||
+    die "The backup folder must be one folder name under ${BACKUP_ROOT}."
+  with_evidence saas-restore-test saas_restore_test "${sha}" "${backup}"
+}
+
+# Restores a *-saas backup (the newest, or <backup folder>) into the copy onyx-saas-restore
+# on 127.0.0.1:3300 and checks it: the manifest of the copy equals the manifest of the
+# backup, and the journey read checks pass on the copy (--after-restart --no-chat). The tool
+# services of onyx-saas stop for the test (memory); the exit handler removes the copy,
+# starts them again and checks that the production containers and the public URL are as
+# before. The last line is RESULT=restore-test-passed or RESULT=restore-test-failed.
+saas_restore_test() {
+  local sha="$1" backup="$2" state tag journey="${ONYX_SRC_DIR}/product/test-corpus/saas_journey.py"
+  trap 'on_saas_restore_test_exit' EXIT
+  section "vm-bootstrap saas-restore-test ${sha} $(date -u +%FT%TZ)"
+  saas_restore_guard
+  docker info >/dev/null 2>&1 || die "docker does not work without sudo. restore.sh needs it."
+  docker_setup
+  saas_must_serve
+  checkout_source "${sha}" || die "The checkout of ${sha} failed. Nothing was changed."
+  [[ -f "${journey}" ]] || die "${journey} is missing at this commit. Nothing was changed."
+  [[ -n "${backup}" ]] || backup="$(saas_newest_backup)"
+  [[ -n "${backup}" && -d "${backup}" ]] || die "No *-saas backup in ${BACKUP_ROOT}. Run saas-backup first."
+  echo "Backup: ${backup}"
+  saas_restore_gates "${backup}"
+  SAAS_RESTORE_IDS_BEFORE="$(dk ps -aq --no-trunc --filter "label=com.docker.compose.project=${SAAS_PROJECT}" | sort)"
+  saas_restore_remove_copy || die "The leftovers of an earlier copy could not be removed."
+
+  section "stopping the tool services of ${SAAS_PROJECT} (${SAAS_TOOL_SERVICES[*]})"
+  echo "Chats that use the Code Interpreter or web search fail until this test ends (about 10 to 20 minutes)."
+  SAAS_RESTORE_TOOLS_STOPPED=1
+  saas_compose stop "${SAAS_TOOL_SERVICES[@]}" || die "The tool services could not be stopped."
+  saas_restore_memory_gate
+  saas_restore_prepare "${sha}" || die "The folder ${SAAS_RESTORE_DIR} could not be prepared."
+
+  section "restore.sh into project ${SAAS_RESTORE_PROJECT} (${SAAS_RESTORE_URL})"
+  COMPOSE_FILE="$(join_colon "${SAAS_RESTORE_FILES[@]}")" COMPOSE_PROFILES=s3-filestore \
+    HOST_PORT="${SAAS_RESTORE_PORT}" RESTORE_EXTRA_SECRETS=DB_READONLY_PASSWORD \
+    "${ONYX_SRC_DIR}/product/deploy/restore.sh" "${backup}" "${SAAS_RESTORE_COMPOSE_DIR}" "${SAAS_RESTORE_PROJECT}" ||
+    die "restore.sh failed."
+  wait_health "${SAAS_RESTORE_URL}" || die "The copy is not healthy at ${SAAS_RESTORE_URL}."
+  show "docker compose ps (${SAAS_RESTORE_PROJECT})" saas_restore_compose ps --format '{{.Name}} {{.Status}}'
+
+  section "manifest of the copy against the manifest of the backup"
+  cp "${backup}/extra/manifest.tsv" "${EVIDENCE_DIR}/backup-manifest.tsv" || die "The manifest of the backup could not be copied."
+  saas_manifest saas_restore_psql >"${EVIDENCE_DIR}/restore-manifest.tsv" || die "The manifest of the copy could not be read."
+  if ! diff -u "${EVIDENCE_DIR}/backup-manifest.tsv" "${EVIDENCE_DIR}/restore-manifest.tsv"; then
+    die "The manifest of the copy differs from the manifest of the backup (see the diff above)."
+  fi
+  echo "The manifests are identical ($(grep -c . "${EVIDENCE_DIR}/restore-manifest.tsv") rows)."
+
+  section "customer journey read checks on the copy (saas_journey.py --after-restart --no-chat)"
+  state="${EVIDENCE_DIR}/restore-journey-state.json"
+  install -m 600 "${backup}/extra/journey_state.json" "${state}" || die "The journey state of the backup could not be copied."
+  tag="$(json_value "${state}" tag)"
+  [[ "${tag}" =~ ^[a-z0-9][a-z0-9-]{0,23}$ ]] || die "The journey state of the backup has no valid tag."
+  echo "Tag of the backup's journey: ${tag}"
+  MT_PASSWORD_SALT="$(cat "${SAAS_JOURNEY_SALT_FILE}")" python3 "${journey}" --base-url "${SAAS_RESTORE_URL}" \
+    --tag "${tag}" --state "${state}" --after-restart --no-chat ||
+    die "The journey read checks failed on the copy."
+  SAAS_RESTORE_PASSED=1
+}
+
+# Checks that change nothing: files, checksums, release, salt, port and disk.
+saas_restore_gates() {
+  local backup="$1" file tag release root free_kb used_kb needed_kb
+  section "gates (nothing is changed before they pass)"
+  for file in SHA256SUMS env.backup db_volume.tar.gz opensearch-data.tar.gz minio_data.tar.gz \
+    file-system.tar.gz extra/manifest.tsv extra/journey_state.json; do
+    [[ -f "${backup}/${file}" ]] || die "${backup}/${file} is missing. Nothing was changed."
+  done
+  (cd "${backup}" && sha256sum -c --quiet --strict SHA256SUMS) || die "The checksums of ${backup} do not pass. Nothing was changed."
+  echo "files: present; SHA256SUMS passes"
+  tag="$(stack_env_value "${backup}/env.backup" IMAGE_TAG)"
+  release="$(release_value ONYX_RELEASE_TAG)"
+  [[ -n "${tag}" && "${tag}" == "${release}" ]] ||
+    die "The backup is of release ${tag:-unknown}; this commit pins ${release}. Nothing was changed."
+  echo "release: ${tag}"
+  [[ -s "${SAAS_JOURNEY_SALT_FILE}" ]] || die "${SAAS_JOURNEY_SALT_FILE} is missing. Nothing was changed."
+  [[ -z "$(ss -ltnH "sport = :${SAAS_RESTORE_PORT}" 2>/dev/null)" ]] ||
+    die "Port ${SAAS_RESTORE_PORT} is in use. Nothing was changed."
+  echo "port ${SAAS_RESTORE_PORT}: free"
+  root="$(dk info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+  free_kb="$(disk_free_kb "${root:-/var/lib/docker}")"
+  [[ "${free_kb}" =~ ^[0-9]+$ ]] || free_kb="$(disk_free_kb /)"
+  used_kb="$(du -sk "${backup}" | cut -f1)"
+  needed_kb=$((used_kb * 3 + SAAS_MIN_FREE_KB))
+  [[ "${free_kb}" =~ ^[0-9]+$ ]] || die "The free disk space is unknown. Nothing was changed."
+  echo "disk: $((free_kb / 1024)) MiB free for Docker; the copy needs about $((needed_kb / 1024)) MiB (3 x backup + 5 GiB)"
+  ((free_kb >= needed_kb)) || die "Not enough disk space for the copy. Nothing was changed."
+}
+
+# MemAvailable after the tool services stopped. The handler starts them again.
+saas_restore_memory_gate() {
+  local available
+  section "memory before the copy starts"
+  free -m
+  available="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)"
+  [[ "${available}" =~ ^[0-9]+$ ]] || die "MemAvailable is not in /proc/meminfo."
+  echo "MemAvailable: $((available / 1024)) MiB. The copy needs $((SAAS_RESTORE_MIN_AVAILABLE_KB / 1024)) MiB."
+  ((available >= SAAS_RESTORE_MIN_AVAILABLE_KB)) ||
+    die "Only $((available / 1024)) MiB of memory is available. The copy was not started. Run the test when the executors are idle."
+}
+
+# An empty restore folder with the release files, compose.saas.yml and compose.restore.yml.
+saas_restore_prepare() {
+  local sha="$1"
+  if [[ ! -d "${SAAS_RESTORE_DIR}" ]]; then
+    sudo -n install -d -o "$(id -un)" -g "$(id -gn)" "${SAAS_RESTORE_DIR}" || return 1
+  fi
+  saas_restore_clear_folder || return 1
+  mkdir -p "${SAAS_RESTORE_COMPOSE_DIR}" || return 1
+  export_release_files "${SAAS_RESTORE_COMPOSE_DIR}" "${sha}" || return 1
+  export_overlay "${sha}" product/deploy/mt/compose.saas.yml "${SAAS_RESTORE_COMPOSE_DIR}" || return 1
+  export_overlay "${sha}" product/deploy/mt/compose.restore.yml "${SAAS_RESTORE_COMPOSE_DIR}" || return 1
+  [[ ! -e "${SAAS_RESTORE_COMPOSE_DIR}/.env" ]] || return 1
+}
+
+# Empties the restore folder: the restored .env holds the production secrets.
+saas_restore_clear_folder() {
+  saas_restore_guard
+  [[ -d "${SAAS_RESTORE_DIR}" ]] || return 0
+  find "${SAAS_RESTORE_DIR}" -mindepth 1 -delete 2>/dev/null ||
+    sudo -n find "${SAAS_RESTORE_DIR}" -mindepth 1 -delete
+}
+
+# Removes the containers (with their anonymous volumes), the volumes and the networks of
+# project onyx-saas-restore, found by the Compose label; every volume must also carry the
+# name prefix. It touches nothing of onyx-saas or onyx.
+saas_restore_remove_copy() {
+  local containers volumes volume networks
+  saas_restore_guard
+  ((${#DOCKER_CMD[@]})) || return 0
+  containers="$(stack_containers "${SAAS_RESTORE_PROJECT}")" || return 1
+  [[ -z "${containers}" ]] || xargs -r "${DOCKER_CMD[@]}" rm -f -v <<<"${containers}" >/dev/null || return 1
+  volumes="$(dk volume ls -q --filter "label=com.docker.compose.project=${SAAS_RESTORE_PROJECT}")" || return 1
+  while IFS= read -r volume; do
+    [[ -z "${volume}" || "${volume}" == "${SAAS_RESTORE_PROJECT}_"* ]] || {
+      echo "ERROR: volume ${volume} has the label of ${SAAS_RESTORE_PROJECT} but not its name prefix. Nothing more is removed." >&2
+      return 1
+    }
+  done <<<"${volumes}"
+  [[ -z "${volumes}" ]] || xargs -r "${DOCKER_CMD[@]}" volume rm <<<"${volumes}" >/dev/null || return 1
+  networks="$(dk network ls -q --filter "label=com.docker.compose.project=${SAAS_RESTORE_PROJECT}")" || return 1
+  [[ -z "${networks}" ]] || xargs -r "${DOCKER_CMD[@]}" network rm <<<"${networks}" >/dev/null || return 1
+  echo "Project ${SAAS_RESTORE_PROJECT} has no containers, volumes or networks."
+}
+
+# Waits until ci-gateway is healthy (its health check reaches the code interpreter through
+# the proxy), then runs the basic probes from api_server.
+saas_wait_tools() {
+  local cid health="" deadline=$((SECONDS + 300))
+  cid="$(saas_compose ps -q ci-gateway 2>/dev/null | head -n 1)"
+  [[ -n "${cid}" ]] || { echo "ERROR: ci-gateway has no running container." >&2; return 1; }
+  until [[ "${health}" == healthy ]]; do
+    ((SECONDS < deadline)) || { echo "ERROR: ci-gateway is not healthy after 300 s (${health:-unknown})." >&2; return 1; }
+    sleep 10
+    health="$(dk inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "${cid}" 2>/dev/null || true)"
+  done
+  echo "ci-gateway is healthy."
+  saas_tool_probes basic
+}
+
+on_saas_restore_test_exit() {
+  local code=$? ok=1 ids_after url_code
+  trap - EXIT
+  ((code == 0 && SAAS_RESTORE_PASSED)) || ok=0
+  section "cleanup: the copy ${SAAS_RESTORE_PROJECT}"
+  if ((${#DOCKER_CMD[@]})); then
+    saas_restore_remove_copy || { echo "ERROR: the copy could not be removed completely." >&2; ok=0; }
+  fi
+  saas_restore_clear_folder || { echo "ERROR: ${SAAS_RESTORE_DIR} could not be emptied (it holds a .env with secrets)." >&2; ok=0; }
+  if ((SAAS_RESTORE_TOOLS_STOPPED)); then
+    section "starting the tool services of ${SAAS_PROJECT} again"
+    saas_compose start "${SAAS_TOOL_SERVICES[@]}" || { echo "ERROR: the tool services did not start." >&2; ok=0; }
+    saas_wait_tools || ok=0
+  fi
+  if [[ -n "${SAAS_RESTORE_IDS_BEFORE}" ]]; then
+    section "production checks"
+    ids_after="$(dk ps -aq --no-trunc --filter "label=com.docker.compose.project=${SAAS_PROJECT}" | sort)"
+    if [[ "${ids_after}" == "${SAAS_RESTORE_IDS_BEFORE}" ]]; then
+      echo "The container IDs of ${SAAS_PROJECT} are unchanged ($(grep -c . <<<"${ids_after}") containers)."
+    else
+      echo "ERROR: the container IDs of ${SAAS_PROJECT} changed during the test." >&2
+      ok=0
+    fi
+    url_code="$(http_code "${SAAS_URL}/api/health")"
+    if [[ "${url_code}" == 200 ]]; then
+      echo "${SAAS_URL}/api/health answers 200."
+    else
+      echo "ERROR: ${SAAS_URL}/api/health answers ${url_code}." >&2
+      ok=0
+    fi
+  fi
+  if ((ok)); then
+    echo "RESULT=restore-test-passed"
+    exit 0
+  fi
+  echo "RESULT=restore-test-failed"
+  exit 1
+}
+
+# ---------------------------------------------------------------- saas-tools-check
+
+saas_tools_check_wrapper() {
+  local sha="${1:-}"
+  check_sha "${sha}"
+  with_evidence saas-tools-check saas_tools_check "${sha}"
+}
+
+# The service isolation probes from api_server, then tools_check.py: it signs up a new
+# company C (tag tools-<hex>) and tests the Code Interpreter and web search of the companies
+# of the last saas-journey run.
+saas_tools_check() {
+  local sha="$1" tag tools="${ONYX_SRC_DIR}/product/test-corpus/tools_check.py"
+  section "vm-bootstrap saas-tools-check ${sha} $(date -u +%FT%TZ)"
+  docker_setup
+  saas_must_serve
+  checkout_source "${sha}" || die "The checkout of ${sha} failed."
+  [[ -f "${tools}" ]] || die "${tools} is missing at this commit."
+  [[ -f "${SAAS_JOURNEY_STATE_FILE}" ]] || die "${SAAS_JOURNEY_STATE_FILE} is missing. Run the saas-journey action first."
+  [[ -s "${SAAS_JOURNEY_SALT_FILE}" ]] || die "${SAAS_JOURNEY_SALT_FILE} is missing. Run the saas-journey action first."
+  saas_tool_probes isolation || die "The service isolation probes failed."
+  tag="tools-$(openssl rand -hex 4)" || die "openssl rand failed."
+  echo "Tag of company C: ${tag}"
+  saas_reset_signup_limit
+  section "tools_check.py (Code Interpreter and web search)"
+  MT_PASSWORD_SALT="$(cat "${SAAS_JOURNEY_SALT_FILE}")" python3 "${tools}" --base-url "${SAAS_URL}" \
+    --state "${SAAS_JOURNEY_STATE_FILE}" --tag "${tag}" --record "${EVIDENCE_DIR}/tools_state.json" ||
+    die "tools_check.py failed."
+  section "saas-tools-check complete"
 }
 
 main "$@"

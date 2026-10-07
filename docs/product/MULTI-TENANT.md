@@ -263,10 +263,10 @@ assistant, and adds documents again.
 
 ### Deploys after the cutover
 
-`axi-deploy-dev.yml` runs `deploy-remote.sh` on every push to `main`. That script starts
-project `onyx` with `docker compose up -d`. When `onyx-saas` has running containers, the script
-changes nothing, prints a notice and exits with 0: ports 80 and 443 belong to `onyx-saas`.
-Run `saas-update` to deploy a commit on `onyx-saas`.
+`axi-deploy-dev.yml` runs `deploy-remote.sh` on every push to `main`. When the active stack is
+`onyx-saas`, the script runs `saas-update` of that commit and never starts project `onyx`:
+ports 80 and 443 belong to `onyx-saas`. See section 9. A manual `saas-update` run
+(`axi-bootstrap-dev.yml`) does the same.
 
 ### Rollback
 
@@ -316,8 +316,9 @@ to `backend/` at v4.8.4.
 
 The overlay `product/deploy/mt/compose.tools.yml` adds three services to `onyx-saas`. They are
 in the Compose profile `code-interpreter` (`COMPOSE_PROFILES=s3-filestore,code-interpreter` in
-the saas `.env`). Every image is pinned by digest (`tag@sha256:...`); the `compose-config` job
-of `axi-product-ci.yml` renders this file set and fails on an unpinned image.
+the saas `.env`). `release.env` pins each service image as `tag@sha256:...` and the executor
+image by digest. The `compose-config` job of `axi-product-ci.yml` renders this file set and
+fails when an image of `release.env` is not pinned or does not reach the render.
 
 | Service | Role |
 | --- | --- |
@@ -340,10 +341,12 @@ of `axi-product-ci.yml` renders this file set and fails on an unpinned image.
   `app_configs.py:1678-1684`).
 - Memory budget next to the stack: sandbox API 3 GiB, all executors together 3 GiB (a
   systemd slice of the executor daemon), SearXNG 512 MiB, gateway 128 MiB.
-- Generated files are saved as chat files (`python_tool.py:484-497`) and served by
-  `GET /api/chat/file/{id}` to the owner of the chat (`onyx/access/access.py:221-261`). Another
-  company gets 404. Another user of the same company gets what upstream allows (the test
-  records that status as INFO).
+- Generated files are saved in the file store of the company with the origin
+  `CHAT_IMAGE_GEN` (`python_tool.py:484-497`) and served by `GET /api/chat/file/{id}`.
+  Another company gets 404: the file record is in the schema of the company
+  (`user_can_access_chat_file`, `onyx/access/access.py:221-286`). In v4.8.4 every user of the
+  same company who knows the file id can read a `CHAT_IMAGE_GEN` file (upstream TODO at
+  `access.py:269-284`). The test records that status as INFO.
 
 ### Rootless daemon or main-socket fallback
 
@@ -432,8 +435,11 @@ with the accounts of the last `saas-journey` run and one new company C. Steps a 
 - RESULT line: the last line of the `saas-update` log is `RESULT=deployed|unchanged|rolled-back|failed`.
   `deployed`: the new containers run and the public URL is healthy. `unchanged`: the commit
   pins what already runs. `rolled-back`: the new state failed its health check and the
-  previous pins run again. `failed`: the update stopped; read the log. The workflow summary
-  shows the line and the log is an artifact. The job fails for `rolled-back` and `failed`.
+  previous pins run again. `failed`: the update stopped; read the log. Two more values can
+  occur: `rollback-failed` (the update and its rollback failed; repair by hand) and `missing`
+  (`deploy-remote.sh` found no RESULT line: the script died). The workflow summary shows the
+  line and the log is an artifact. The job fails for every value except `deployed` and
+  `unchanged`, and for a non-zero exit code of `saas-update`.
   `/srv/onyx/deploy.log` keeps one line per run; `/srv/onyx-saas/deployed.env` holds
   `DEPLOYED_SHA`.
 - Rollback of pins: commit the previous digest in `release.env` and push to `main`; the
