@@ -107,6 +107,11 @@ services:
       # render-redirect.sh then answers POST /api/tenants/leave-team with 409
       # (see product/deploy/nginx/render-redirect.sh).
       - LEAVE_TEAM_GUARD=true
+      # With data/landing/index.html, render-redirect.sh serves the landing page at the exact
+      # route / and its assets at /_landing/. vm-bootstrap.sh saas-update installs the build.
+      - LANDING_PAGE=true
+    volumes:
+      - ../data/landing:/usr/share/nginx/landing:ro
 
   # With MULTI_TENANT=true the api_server does not create the file store bucket
   # (onyx/main.py:428-431; cloud uses IaC). This one-shot job creates it. The MinIO image

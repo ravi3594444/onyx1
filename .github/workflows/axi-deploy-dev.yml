@@ -91,6 +91,23 @@ jobs:
         with:
           ref: ${{ env.DEPLOY_SHA }}
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # ratchet:actions/setup-node@v4
+        if: steps.secrets.outputs.ready == 'true'
+        with:
+          node-version: "22"
+      # The landing page of this commit (product/landing). The VM serves it at / and
+      # /_landing/; vm-bootstrap.sh saas-update installs it. Public build values only.
+      - name: Build the landing page
+        if: steps.secrets.outputs.ready == 'true'
+        working-directory: product/landing
+        env:
+          VITE_APP_URL: https://my-knowledge.duckdns.org
+          VITE_LANDING_BASE_PATH: /_landing/
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+          test -f dist/index.html
+          tar -czf "${RUNNER_TEMP}/landing.tgz" -C dist .
       - name: Deploy over SSH
         if: steps.secrets.outputs.ready == 'true'
         env:
@@ -111,17 +128,27 @@ jobs:
           printf '%s\n' "${DEV_SSH_KEY}" >"${ssh_dir}/key"
           printf '%s\n' "${DEV_SSH_KNOWN_HOSTS}" >"${ssh_dir}/known_hosts"
           log="${RUNNER_TEMP}/deploy.log"
+          ssh_opts=(-F /dev/null -i "${ssh_dir}/key"
+            -o IdentitiesOnly=yes -o BatchMode=yes
+            -o PreferredAuthentications=publickey
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="${ssh_dir}/known_hosts"
+            -o ConnectTimeout=30 -o ServerAliveInterval=30
+            -o ServerAliveCountMax=4
+            -l "${DEV_SSH_USER}")
+          # Stages the landing build in /srv/onyx/landing-staging/<sha>/ (newest 3 stay).
+          stage="/srv/onyx/landing-staging"
+          ssh "${ssh_opts[@]}" -- "${DEV_SSH_HOST}" \
+            "set -e; d=${stage}/${DEPLOY_SHA}; mkdir -p ${stage}; rm -rf \"\$d.tmp\"; mkdir \"\$d.tmp\";
+            tar -xzf - --no-same-owner -C \"\$d.tmp\"; test -f \"\$d.tmp/index.html\";
+            rm -rf \"\$d\"; mv \"\$d.tmp\" \"\$d\"; touch \"\$d\";
+            ls -1dt ${stage}/*/ | tail -n +4 | xargs -r rm -rf;
+            echo \"Staged the landing build in \$d.\"" \
+            <"${RUNNER_TEMP}/landing.tgz" 2>&1 | tee "${log}"
           # pipefail: the job fails when the script on the VM fails, not only when tee fails.
-          ssh -F /dev/null -i "${ssh_dir}/key" \
-            -o IdentitiesOnly=yes -o BatchMode=yes \
-            -o PreferredAuthentications=publickey \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="${ssh_dir}/known_hosts" \
-            -o ConnectTimeout=30 -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=4 \
-            -l "${DEV_SSH_USER}" -- "${DEV_SSH_HOST}" \
+          ssh "${ssh_opts[@]}" -- "${DEV_SSH_HOST}" \
             "ALLOW_RELEASE_CHANGE=${ALLOW_RELEASE_CHANGE} bash -s -- ${DEPLOY_SHA}" \
-            <product/deploy/deploy-remote.sh 2>&1 | tee "${log}"
+            <product/deploy/deploy-remote.sh 2>&1 | tee -a "${log}"
       - name: Write the summary
         if: always() && steps.secrets.outputs.ready == 'true'
         run: |

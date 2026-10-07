@@ -72,6 +72,16 @@ It does not change the active stack or pin a new application image.
 6. Check signup, login, and the actual application entry route after the proxy change.
 7. Verify chat, uploads, citations, and invitations still work after deployment.
 
+## Deployment on the VM
+
+`axi-deploy-dev.yml` builds this folder for every deployed commit on `main`.
+It uploads the build to `/srv/onyx/landing-staging/<sha>/` on the VM.
+`vm-bootstrap.sh saas-update` copies it to `deployment/data/landing` of `onyx-saas`.
+nginx serves it at the exact route `/` and its assets at `/_landing/`.
+A request with the Onyx auth cookie goes from `/` to `/app`.
+All other routes stay with Onyx. See `product/deploy/nginx/render-redirect.sh`.
+The smoke checks of `saas-update` test `/`, the cookie redirect, the assets, login and signup.
+
 ## Verification
 
 The handoff report records the checks run before this PR.

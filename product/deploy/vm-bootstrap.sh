@@ -1484,6 +1484,10 @@ readonly SAAS_JOURNEY_STATE_FILE="${SAAS_DIR}/journey_state.json"
 readonly SAAS_TRANSFER_FILE="${SAAS_DIR}/account-transfer.json"
 readonly LIVE_DATA_DIR="${ONYX_DEPLOY_DIR}/deployment/data"
 readonly SAAS_DATA_DIR="${SAAS_DIR}/deployment/data"
+# nginx serves this folder at / and /_landing/ (LANDING_PAGE in compose.saas.yml).
+readonly SAAS_LANDING_DIR="${SAAS_DATA_DIR}/landing"
+# axi-deploy-dev.yml uploads the landing build of each commit to <dir>/<sha>/.
+readonly LANDING_STAGING_DIR="${ONYX_DEPLOY_DIR}/landing-staging"
 # 1 while cutover has the live stack stopped and onyx-saas is not yet healthy.
 CUTOVER_LIVE_STOPPED=0
 
@@ -2312,7 +2316,7 @@ SAAS_UPDATE_DONE=0
 # output is RESULT=deployed, RESULT=unchanged, RESULT=rolled-back or RESULT=failed.
 # axi-deploy-dev.yml never touches onyx-saas.
 saas_update() {
-  local sha="$1" mode="$2" new_tag current_tag unchanged=0 executor_image
+  local sha="$1" mode="$2" new_tag current_tag unchanged=0 executor_image render_before render_after
   trap 'on_saas_update_exit' EXIT
   section "vm-bootstrap saas-update ${sha} $(date -u +%FT%TZ) (mode=${mode:-same-release})"
   docker_setup
@@ -2332,10 +2336,13 @@ saas_update() {
   saas_update_snapshot || die "The rollback snapshot could not be written. Nothing was changed."
   PLATFORM_KEY_CHANGED=0
   saas_prepare "${sha}"
+  render_before="$(sha256sum <"${SAAS_DATA_DIR}/nginx-extra/render-redirect.sh" 2>/dev/null || true)"
   saas_copy_https_files "${sha}"
-  if saas_update_unchanged; then
+  render_after="$(sha256sum <"${SAAS_DATA_DIR}/nginx-extra/render-redirect.sh" 2>/dev/null || true)"
+  saas_install_landing "${sha}" || die "The landing page could not be installed."
+  if saas_update_unchanged && [[ "${render_before}" == "${render_after}" ]] && ((SAAS_LANDING_CHANGED == 0)); then
     unchanged=1
-    echo "The .env, the compose files and the tool configs are equal to the snapshot."
+    echo "The .env, the compose files, the tool configs, the nginx files and the landing page are unchanged."
   fi
   executor_image="$(stack_env_value "${SAAS_COMPOSE_DIR}/.env" PYTHON_EXECUTOR_IMAGE)"
   [[ -n "${executor_image}" ]] || die "PYTHON_EXECUTOR_IMAGE is empty in ${SAAS_COMPOSE_DIR}/.env."
@@ -2346,6 +2353,7 @@ saas_update() {
   SAAS_UPDATE_STARTED=1
   section "docker compose -p ${SAAS_PROJECT} up -d"
   saas_compose up -d || die "docker compose up -d failed."
+  saas_nginx_refresh "${render_before}" "${render_after}" || die "nginx could not be started again with the new nginx files."
   wait_health "${SAAS_URL}" || die "${SAAS_PROJECT} is not healthy at ${SAAS_URL} after the update."
   PUBLIC_URL="${SAAS_URL}"
   check_public_url || die "The public URL checks failed after the update."
@@ -2489,7 +2497,78 @@ sys.exit(0 if data.get("multi_tenant") is True else 1)
   [[ "${code}" == 409 ]] || { echo "ERROR: POST /api/tenants/leave-team answers ${code}, not 409." >&2; return 1; }
   echo "POST /api/tenants/leave-team answers 409 (leave-team guard)."
   saas_wait_tool_health || return 1
-  saas_tool_probes basic
+  saas_tool_probes basic || return 1
+  saas_landing_checks
+}
+
+SAAS_LANDING_CHANGED=0
+
+# Copies the landing build that axi-deploy-dev.yml staged for <sha> into SAAS_LANDING_DIR.
+# Without a staged build for <sha> (a manual saas-update) the installed page stays.
+saas_install_landing() {
+  local sha="$1"
+  local staged="${LANDING_STAGING_DIR}/${sha}"
+  section "landing page"
+  mkdir -p "${SAAS_LANDING_DIR}" || return 1
+  if [[ ! -f "${staged}/index.html" ]]; then
+    if [[ -f "${SAAS_LANDING_DIR}/index.html" ]]; then
+      echo "No landing build staged for ${sha}. The installed landing page stays."
+    else
+      echo "No landing build staged for ${sha} and none installed. / stays with Onyx."
+    fi
+    return 0
+  fi
+  if diff -rq "${staged}" "${SAAS_LANDING_DIR}" >/dev/null 2>&1; then
+    echo "The landing build of ${sha} is already installed."
+    return 0
+  fi
+  find "${SAAS_LANDING_DIR}" -mindepth 1 -delete || return 1
+  cp -R "${staged}/." "${SAAS_LANDING_DIR}/" || return 1
+  # The nginx workers read the files as another user.
+  chmod -R a+rX,go-w "${SAAS_LANDING_DIR}" || return 1
+  SAAS_LANDING_CHANGED=1
+  echo "Installed the landing build of ${sha}: $(find "${SAAS_LANDING_DIR}" -type f | wc -l) files."
+}
+
+# render-redirect.sh runs only when nginx starts. Recreates nginx when the script changed, or
+# when a landing page is installed and the running config does not serve it yet.
+saas_nginx_refresh() {
+  local before="$1" after="$2" reason=""
+  [[ "${before}" == "${after}" ]] || reason="render-redirect.sh changed"
+  if [[ -z "${reason}" && -f "${SAAS_LANDING_DIR}/index.html" ]] &&
+    ! saas_compose exec -T nginx grep -qF 'location ^~ /_landing/' /etc/nginx/conf.d/app.conf; then
+    reason="the running nginx config has no landing block"
+  fi
+  [[ -n "${reason}" ]] || return 0
+  section "nginx again: ${reason}"
+  saas_compose up -d --no-deps --force-recreate nginx || return 1
+}
+
+# With an installed landing page: / serves it, / with the auth cookie goes to /app, the
+# assets load, and the Onyx login and signup routes still answer.
+saas_landing_checks() {
+  local body code location asset
+  if [[ ! -f "${SAAS_LANDING_DIR}/index.html" ]]; then
+    echo "No landing page installed: no landing checks."
+    return 0
+  fi
+  section "landing page checks"
+  body="$(curl -s --max-time 20 "${SAAS_URL}/")" || { echo "ERROR: GET / failed." >&2; return 1; }
+  grep -qF '/_landing/' <<<"${body}" || { echo "ERROR: GET / does not answer the landing page." >&2; return 1; }
+  echo "GET / answers the landing page."
+  location="$(curl -s -o /dev/null --max-time 20 -w '%{http_code} %{redirect_url}' -b fastapiusersauth=check "${SAAS_URL}/")"
+  [[ "${location}" == "302 ${SAAS_URL}/app" ]] || { echo "ERROR: GET / with the auth cookie answers ${location}, not 302 to /app." >&2; return 1; }
+  echo "GET / with the auth cookie answers 302 to /app."
+  while IFS= read -r asset; do
+    code="$(http_code "${SAAS_URL}${asset}")"
+    [[ "${code}" == 200 ]] || { echo "ERROR: ${asset} answers ${code}, not 200." >&2; return 1; }
+    echo "${asset} answers 200."
+  done < <(grep -oE '/_landing/[^"]+' <<<"${body}" | sort -u)
+  for asset in /auth/login /auth/signup; do
+    code="$(http_code "${SAAS_URL}${asset}")"
+    [[ "${code}" =~ ^[23][0-9][0-9]$ ]] || { echo "ERROR: ${asset} answers ${code}." >&2; return 1; }
+    echo "${asset} answers ${code} (Onyx)."
+  done
 }
 
 # Waits until code-interpreter, ci-gateway and searxng report healthy (up to 5 minutes).
