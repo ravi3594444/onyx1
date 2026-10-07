@@ -2488,13 +2488,13 @@ sys.exit(0 if data.get("multi_tenant") is True else 1)
   code="$(http_code -X POST "${SAAS_URL}/api/tenants/leave-team")"
   [[ "${code}" == 409 ]] || { echo "ERROR: POST /api/tenants/leave-team answers ${code}, not 409." >&2; return 1; }
   echo "POST /api/tenants/leave-team answers 409 (leave-team guard)."
-  saas_wait_tools || return 1
+  saas_wait_tool_health || return 1
   saas_tool_probes basic
 }
 
 # Waits until code-interpreter, ci-gateway and searxng report healthy (up to 5 minutes).
 # On a timeout it prints their state and the last log lines (the services log no secrets).
-saas_wait_tools() {
+saas_wait_tool_health() {
   local service id state deadline=$((SECONDS + 300)) pending
   section "tool services health"
   while :; do
